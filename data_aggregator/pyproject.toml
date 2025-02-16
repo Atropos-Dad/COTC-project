@@ -1,0 +1,11 @@
+[project]
+name = "data-aggregator"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["flask"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+flask = "^3.0.0"

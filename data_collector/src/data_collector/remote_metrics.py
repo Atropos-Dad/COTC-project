@@ -2,10 +2,11 @@
 import logging
 import berserk
 import os
+import asyncio
 from dotenv import load_dotenv
 from datetime import datetime
 from typing import Optional, AsyncGenerator, Dict, Any
-from models import Player, ChessGameMetrics
+from data_collector.models import Player, ChessGameMetrics
 
 # Load environment variables from .env file
 load_dotenv()
@@ -34,8 +35,16 @@ class LichessMetricsCollector:
         positions_processed = 0
         
         try:
-            for position in tv_feed:
-                # Convert synchronous iteration to async by yielding
+            while True:  
+                await asyncio.sleep(0.1)  
+                
+                try:
+                    position = next(tv_feed)  
+                except StopIteration:
+                    logger.warning("TV feed ended, reconnecting...")
+                    tv_feed = client.tv.stream_current_game()
+                    continue
+                
                 data = position['d']
                 timestamp = datetime.utcnow()
                 
@@ -106,20 +115,24 @@ class LichessMetricsCollector:
         
         self._current_game_id = data['id']
         
+        fen = data.get('fen')
+        
+        # Get piece counts from FEN
+        white_pieces, black_pieces = fen_to_piece_count(fen) if fen else (0, 0)
+
         logger.info("New game started: %s, White: %s (%d) vs Black: %s (%d)", 
                    self._current_game_id,
                    self._white_player.name, self._white_player.rating,
                    self._black_player.name, self._black_player.rating)
         
-        white_pieces, black_pieces = fen_to_piece_count(data['fen'])
-
+        
         metrics = ChessGameMetrics(
             timestamp=timestamp,
             game_id=self._current_game_id,
             white_player=self._white_player,
             black_player=self._black_player,
             new_game=True,
-            fen_position=data['fen'],
+            fen_position=fen,
             white_piece_count=white_pieces,
             black_piece_count=black_pieces
 
@@ -166,10 +179,12 @@ def print_raw_lichess_data():
 
 def fen_to_piece_count(fen: str) -> (int, int):
     """Count white and black pieces in a FEN string."""
-    fen = fen.replace(' ', '')
-    white_count = fen.count('KQBNR')
-    black_count = fen.count('kqbnr')
+    # Get the piece placement part of FEN (before the first space)
+    fen = fen.split(' ')[0]
+    white_count = sum(c in 'PRNBQK' for c in fen)
+    black_count = sum(c in 'prnbqk' for c in fen)
     return white_count, black_count
+
 
 # convert FEN string to a unicode board
 def fen_to_board(fen: str) -> str:

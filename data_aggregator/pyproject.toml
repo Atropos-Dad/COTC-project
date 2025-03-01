@@ -4,8 +4,33 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["flask"]
+dependencies = [
+    "flask",
+    "flask-socketio",
+    "eventlet",
+    "sqlalchemy",
+    "flask-sqlalchemy",
+    "alembic",
+    "dash",
+    "dash-core-components",
+    "dash-html-components",
+    "dash-bootstrap-components",
+    "plotly",
+    "numpy>=2.2.3",
+    "pandas>=2.2.3",
+    "chess>=1.11.2",
+]
 
 [tool.poetry.dependencies]
 python = "^3.8"
 flask = "^3.0.0"
+sqlalchemy = "^2.0.27"
+flask-sqlalchemy = "^3.1.0"
+flask-socketio = "^5.3.6"
+eventlet = "^0.35.0"
+alembic = "^1.13.1"
+dash = "^2.14.2"
+dash-core-components = "^2.0.0"
+dash-html-components = "^2.0.0"
+dash-bootstrap-components = "^1.5.0"
+plotly = "^5.18.0"

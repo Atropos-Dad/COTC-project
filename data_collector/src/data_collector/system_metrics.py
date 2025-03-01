@@ -2,38 +2,9 @@
 import psutil
 import platform
 import json
-from dataclasses import dataclass, asdict
 from typing import Dict, Any
 
-@dataclass
-class SystemMetrics:
-    cpu_count_physical: int
-    cpu_count_logical: int
-    cpu_percent: float
-    cpu_temp: float
-    memory_total: int
-    memory_available: int
-    memory_percent: float
-    disk_usage: Dict[str, Dict[str, Any]]
-    platform_info: str
-    python_version: str
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert the SystemMetrics instance to a dictionary."""
-        return asdict(self)
-    
-    def to_json(self) -> str:
-        """Convert the SystemMetrics instance to a JSON string."""
-        return json.dumps(self.to_dict())
-    
-    @classmethod
-    def from_json(cls, json_str: str) -> 'SystemMetrics':
-        """Create a SystemMetrics instance from a JSON string."""
-        data = json.loads(json_str)
-        return cls(**data)
-
-
-def collect_system_metrics(cpu_measure_interval: int = 0.2) -> SystemMetrics:
+def collect_system_metrics(cpu_measure_interval: int = 0.2) -> Dict[str, Any]:
     """Collect current system metrics."""
     
     
@@ -114,17 +85,17 @@ def collect_system_metrics(cpu_measure_interval: int = 0.2) -> SystemMetrics:
     # time benefit is negligible
     # in fact, it's better when we don't use async (by 1000th of a second)
 
-    result = SystemMetrics(
-        cpu_count_physical=cpu_count_physical,
-        cpu_count_logical=cpu_count_logical,
-        cpu_percent=cpu_percent,
-        cpu_temp=cpu_temp,
-        memory_total=memory_total,
-        memory_available=memory_available,
-        memory_percent=memory_percent,
-        disk_usage=disk_usage,
-        platform_info=platform_info,
-        python_version=python_version
-    )
+    result = {
+        'cpu_count_physical': cpu_count_physical,
+        'cpu_count_logical': cpu_count_logical,
+        'cpu_percent': cpu_percent,
+        'cpu_temp': cpu_temp,
+        'memory_total': memory_total,
+        'memory_available': memory_available,
+        'memory_percent': memory_percent,
+        'disk_usage': disk_usage,
+        'platform_info': platform_info,
+        'python_version': python_version
+    }
     
     return result

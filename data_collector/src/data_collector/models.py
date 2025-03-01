@@ -1,7 +1,8 @@
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Optional, Dict, Any
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -128,3 +129,30 @@ class SystemMetrics:
         except Exception as e:
             logger.exception("Error converting system metrics to timeseries data")
             raise
+
+@dataclass
+class SystemMetrics:
+    cpu_count_physical: int
+    cpu_count_logical: int
+    cpu_percent: float
+    cpu_temp: float
+    memory_total: int
+    memory_available: int
+    memory_percent: float
+    disk_usage: Dict[str, Dict[str, Any]]
+    platform_info: str
+    python_version: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert the SystemMetrics instance to a dictionary."""
+        return asdict(self)
+    
+    def to_json(self) -> str:
+        """Convert the SystemMetrics instance to a JSON string."""
+        return json.dumps(self.to_dict())
+    
+    @classmethod
+    def from_json(cls, json_str: str) -> 'SystemMetrics':
+        """Create a SystemMetrics instance from a JSON string."""
+        data = json.loads(json_str)
+        return cls(**data)

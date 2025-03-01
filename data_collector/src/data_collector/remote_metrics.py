@@ -36,14 +36,8 @@ class LichessMetricsCollector:
         
         try:
             while True:  
-                await asyncio.sleep(0.1)  
-                
-                try:
-                    position = next(tv_feed)  
-                except StopIteration:
-                    logger.warning("TV feed ended, reconnecting...")
-                    tv_feed = client.tv.stream_current_game()
-                    continue
+                loop = asyncio.get_event_loop()
+                position = await loop.run_in_executor(None, lambda: next(tv_feed))
                 
                 data = position['d']
                 timestamp = datetime.utcnow()
@@ -74,6 +68,9 @@ class LichessMetricsCollector:
                         logger.debug("Processed %d positions in current game", 
                                    positions_processed)
 
+        except StopIteration:
+            logger.warning("TV feed ended, reconnecting...")
+            tv_feed = client.tv.stream_current_game()
         except Exception as e:
             logger.exception("Error processing Lichess TV stream")
             raise

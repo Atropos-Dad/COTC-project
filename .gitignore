@@ -14,3 +14,5 @@ wheels/
 *.lock
 
 .env
+
+data_*.json

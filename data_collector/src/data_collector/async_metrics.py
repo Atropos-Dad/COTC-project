@@ -12,7 +12,7 @@ class AsyncMetricsCollector:
     def __init__(self, 
                  endpoint_url: str, 
                  metrics_collector: Any,  # Instance of a metrics collector class
-                 queue_size: int = 1000,
+                 queue_size: int = 100,  # Reduced queue size for lower latency
                  reconnect_interval: int = 5,
                  max_reconnect_attempts: int = 0):  # 0 for infinite retries
         """Initialize the async metrics collector.
@@ -123,14 +123,15 @@ class AsyncMetricsCollector:
         if not connection_success:
             logger.warning("Initial connection failed, but will continue to try reconnecting")
 
-        # Create tasks for producer, consumer, and connection monitor
+        # Create multiple consumer tasks to process metrics in parallel
+        # This helps ensure metrics are sent as soon as possible
         producer = asyncio.create_task(self._collect_metrics())
-        consumer = asyncio.create_task(self._send_metrics())
+        consumers = [asyncio.create_task(self._send_metrics()) for _ in range(2)]  # Create 2 sender tasks
         connection_monitor = asyncio.create_task(self._monitor_connection())
         
         try:
             # Wait for all tasks
-            await asyncio.gather(producer, consumer, connection_monitor)
+            await asyncio.gather(producer, *consumers, connection_monitor)
         except Exception as e:
             logger.exception("Error in metrics collection/sending tasks")
             # Don't raise the exception - keep trying to work even with errors
@@ -194,7 +195,14 @@ class AsyncMetricsCollector:
             async for metric in self.metrics_collector.generate_metrics():
                 if not self.running:
                     break
-                await self.queue.put(metric)
+                # Use put_nowait to avoid blocking if possible
+                try:
+                    self.queue.put_nowait(metric)
+                except asyncio.QueueFull:
+                    # If queue is full, fall back to blocking put
+                    logger.warning("Queue full, waiting to add metric")
+                    await self.queue.put(metric)
+                
                 metrics_count += 1
                 if metrics_count % 100 == 0:  # Log every 100 metrics
                     logger.debug("Collected %d metrics", metrics_count)
@@ -213,25 +221,30 @@ class AsyncMetricsCollector:
         
         while self.running or not self.queue.empty():
             try:
-                # Get metric from queue
-                metric = await self.queue.get()
-                
-                # Send metric through Socket.IO
+                # Get metric from queue with a short timeout to be responsive
                 try:
-                    logger.debug("Attempting to send metric: %s", json.dumps(metric, indent=2))
-                    await self.sio.emit('metric', metric, namespace=self.namespace)
-                    metrics_sent += 1
-                    if metrics_sent % 100 == 0:  # Log every 100 metrics
-                        logger.info("Sent %d metrics, %d errors", 
-                                   metrics_sent, errors)
-                                
-                except Exception as e:
-                    logger.exception("Socket.IO error sending metric: %s", str(e))
-                    errors += 1
-                
-                # Mark task as done
-                self.queue.task_done()
-                
+                    metric = await asyncio.wait_for(self.queue.get(), timeout=0.01)
+                    
+                    # Send metric through Socket.IO immediately
+                    try:
+                        logger.debug("Sending metric immediately: %s", json.dumps(metric, indent=2))
+                        await self.sio.emit('metric', metric, namespace=self.namespace)
+                        metrics_sent += 1
+                        if metrics_sent % 100 == 0:  # Log every 100 metrics
+                            logger.info("Sent %d metrics, %d errors", 
+                                      metrics_sent, errors)
+                                    
+                    except Exception as e:
+                        logger.exception("Socket.IO error sending metric: %s", str(e))
+                        errors += 1
+                    
+                    # Mark task as done
+                    self.queue.task_done()
+                    
+                except asyncio.TimeoutError:
+                    # No metrics in queue, just continue the loop
+                    await asyncio.sleep(0.01)  # Small sleep to prevent CPU spinning
+                    
             except Exception as e:
                 logger.exception("Unexpected error in send_metrics")
                 errors += 1

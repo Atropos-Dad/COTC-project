@@ -3,7 +3,8 @@ import asyncio
 import logging
 import socketio  # Changed to python-socketio
 import json
-from typing import Any
+import time
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -11,35 +12,58 @@ class AsyncMetricsCollector:
     def __init__(self, 
                  endpoint_url: str, 
                  metrics_collector: Any,  # Instance of a metrics collector class
-                 queue_size: int = 1000):
+                 queue_size: int = 1000,
+                 reconnect_interval: int = 5,
+                 max_reconnect_attempts: int = 0):  # 0 for infinite retries
         """Initialize the async metrics collector.
         
         Args:
             endpoint_url: The URL to send metrics to (should be a ws:// or wss:// URL)
             metrics_collector: Instance of a metrics collector class with generate_metrics method
             queue_size: Maximum size of the queue before blocking
+            reconnect_interval: Time in seconds between reconnection attempts
+            max_reconnect_attempts: Maximum number of reconnection attempts (0 for infinite)
         """
         # Convert ws:// to http:// for Socket.IO
-        self.endpoint_url = endpoint_url.replace('ws://', 'http://').replace('wss://', 'https://') # TODO: why??
+        self.endpoint_url = endpoint_url.replace('ws://', 'http://').replace('wss://', 'https://') # Socket.IO requires HTTP/HTTPS URLs
+        
+        # Extract the namespace from the URL path
+        from urllib.parse import urlparse
+        parsed_url = urlparse(endpoint_url)
+        self.namespace = parsed_url.path or '/ws/data'  # Use path from URL or default to /ws/data
         self.metrics_collector = metrics_collector
         self.queue = asyncio.Queue(maxsize=queue_size)
         self.running = False
+        self.connected = False
+        self.reconnect_interval = reconnect_interval
+        self.max_reconnect_attempts = max_reconnect_attempts
+        self.reconnect_count = 0
+        self.buffer_queue = asyncio.Queue(maxsize=queue_size * 2)  # Buffer for failed sends
         
-        # Initialize Socket.IO client
-        self.sio = socketio.AsyncClient()
+        # Initialize Socket.IO client with auto reconnection enabled
+        self.sio = socketio.AsyncClient(reconnection=True, 
+                                       reconnection_attempts=max_reconnect_attempts if max_reconnect_attempts > 0 else 0,
+                                       reconnection_delay=reconnect_interval,
+                                       logger=True,
+                                       engineio_logger=True)
         self._setup_socketio_handlers()
-        logger.info("Initialized AsyncMetricsCollector with endpoint: %s, queue_size: %d", 
-                   endpoint_url, queue_size)
+        logger.info("Initialized AsyncMetricsCollector with endpoint: %s, queue_size: %d, reconnect_interval: %d", 
+                   endpoint_url, queue_size, reconnect_interval)
 
     def _setup_socketio_handlers(self):
         """Set up Socket.IO event handlers."""
         @self.sio.event
         async def connect():
-            logger.info("Connected to Socket.IO server at %s", self.endpoint_url)
+            logger.info("Connected to Socket.IO server at %s with namespace %s", self.endpoint_url, self.namespace)
+            self.connected = True
+            self.reconnect_count = 0  # Reset reconnect counter on successful connection
+            # Process any buffered metrics once connected
+            asyncio.create_task(self._process_buffer())
 
         @self.sio.event
         async def disconnect():
             logger.warning("Disconnected from Socket.IO server at %s", self.endpoint_url)
+            self.connected = False
 
         @self.sio.event
         def success(data):
@@ -52,35 +76,76 @@ class AsyncMetricsCollector:
         @self.sio.event
         def connect_error(data):
             logger.error("Connection error to Socket.IO server: %s", data)
+            self.connected = False
+            # Will automatically reconnect based on the client settings
 
+    async def _connect_with_retry(self):
+        """Connect to Socket.IO server with retries."""
+        while self.running:
+            try:
+                if not self.sio.connected:
+                    logger.info("Attempting to connect to Socket.IO server at %s", self.endpoint_url)
+                    await self.sio.connect(self.endpoint_url, namespaces=[self.namespace])
+                    return True
+                else:
+                    return True  # Already connected
+            except socketio.exceptions.ConnectionError as e:
+                self.reconnect_count += 1
+                if self.max_reconnect_attempts > 0 and self.reconnect_count >= self.max_reconnect_attempts:
+                    logger.error("Failed to connect after %d attempts. Giving up.", self.reconnect_count)
+                    return False
+                
+                wait_time = self.reconnect_interval
+                logger.warning("Connection attempt %d failed: %s. Retrying in %d seconds...", 
+                              self.reconnect_count, str(e), wait_time)
+                await asyncio.sleep(wait_time)
+            except Exception as e:
+                logger.exception("Unexpected error while connecting to Socket.IO server: %s", str(e))
+                await asyncio.sleep(self.reconnect_interval)
+        
+        return False  # Not running anymore
+    
+    async def _monitor_connection(self):
+        """Monitor the connection and attempt to reconnect when disconnected."""
+        while self.running:
+            if not self.sio.connected and self.running:
+                logger.info("Connection monitor detected disconnection, attempting to reconnect...")
+                await self._connect_with_retry()
+            await asyncio.sleep(self.reconnect_interval)
+    
     async def start(self):
         """Start the metrics collection and sending processes."""
         logger.info("Starting metrics collection and sending processes")
         self.running = True
 
-        # Connect to Socket.IO server
-        try:
-            await self.sio.connect(self.endpoint_url, namespaces=['/ws/data'])
-        except Exception as e:
-            logger.error("Failed to connect to Socket.IO server: %s", str(e))
-            raise
+        # Initial connection - don't raise exception if it fails
+        connection_success = await self._connect_with_retry()
+        if not connection_success:
+            logger.warning("Initial connection failed, but will continue to try reconnecting")
 
-        # Create tasks for producer and consumer
+        # Create tasks for producer, consumer, and connection monitor
         producer = asyncio.create_task(self._collect_metrics())
         consumer = asyncio.create_task(self._send_metrics())
+        connection_monitor = asyncio.create_task(self._monitor_connection())
         
         try:
-            # Wait for both tasks
-            await asyncio.gather(producer, consumer)
+            # Wait for all tasks
+            await asyncio.gather(producer, consumer, connection_monitor)
         except Exception as e:
             logger.exception("Error in metrics collection/sending tasks")
-            raise
+            # Don't raise the exception - keep trying to work even with errors
         finally:
             logger.info("Metrics collection and sending processes stopped")
-            await self.sio.disconnect()
+            if self.sio.connected:
+                try:
+                    await asyncio.wait_for(self.sio.disconnect(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout waiting for Socket.IO to disconnect")
+                except Exception as e:
+                    logger.warning("Error disconnecting from Socket.IO: %s", str(e))
 
     async def stop(self):
-        """Stop the metrics collection and sending processes."""
+        """Stop the metrics collection and sending processes with graceful shutdown."""
         if not self.running:
             logger.info("Collector already stopped")
             return
@@ -89,12 +154,25 @@ class AsyncMetricsCollector:
         self.running = False
         
         try:
+            # Process any metrics remaining in the buffer if connected
+            if self.sio.connected and self.connected and not self.buffer_queue.empty():
+                buffer_size = self.buffer_queue.qsize()
+                logger.info("Processing %d buffered metrics during shutdown", buffer_size)
+                try:
+                    await asyncio.wait_for(self._process_buffer(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout processing buffer during shutdown")
+
             # Wait for queue to be empty with a timeout
             try:
                 await asyncio.wait_for(self.queue.join(), timeout=5.0)
                 logger.info("All pending metrics processed")
             except asyncio.TimeoutError:
                 logger.warning("Timeout waiting for queue to empty, some metrics may be lost")
+            
+            # Report on any metrics left in the buffer
+            if not self.buffer_queue.empty():
+                logger.warning("%d metrics still in buffer at shutdown, data will be lost", self.buffer_queue.qsize())
             
             # Disconnect from Socket.IO server
             if self.sio.connected:
@@ -106,8 +184,8 @@ class AsyncMetricsCollector:
                 except Exception as e:
                     logger.error("Error disconnecting from Socket.IO: %s", str(e))
         except Exception as e:
-            logger.exception("Error during collector cleanup")
-            raise
+            logger.exception("Error during collector cleanup: %s", str(e))
+            # Don't raise the exception during cleanup to allow other shutdown processes to continue
 
     async def _collect_metrics(self):
         """Collect metrics from the generator and put them in the queue."""
@@ -141,7 +219,7 @@ class AsyncMetricsCollector:
                 # Send metric through Socket.IO
                 try:
                     logger.debug("Attempting to send metric: %s", json.dumps(metric, indent=2))
-                    await self.sio.emit('data', metric, namespace='/ws/data')
+                    await self.sio.emit('metric', metric, namespace=self.namespace)
                     metrics_sent += 1
                     if metrics_sent % 100 == 0:  # Log every 100 metrics
                         logger.info("Sent %d metrics, %d errors", 

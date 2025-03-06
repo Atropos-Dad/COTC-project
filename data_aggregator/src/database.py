@@ -85,8 +85,37 @@ def save_metric_data(data):
             if measurement == 'chess_game':
                 metric_type = tags.get('event_type')
             else:
+                # For system metrics, the metric_type is the field name
+                # since each field is a separate metric
                 metric_type = tags.get('metric_type')
+                
+                # If metric_type is not in tags, use the field name as the metric_type
+                # This handles the case where system metrics are sent with fields like 'cpu_percent'
+                if not metric_type and 'value' in fields:
+                    # For system metrics, we need to process each field as a separate metric
+                    for field_name, field_value in fields.items():
+                        if field_name != 'value' and isinstance(field_value, (int, float)):
+                            # Create a new metric for each field
+                            metric = Metric(
+                                origin=origin,
+                                metric_type=field_name,  # Use field name as metric_type
+                                value=float(field_value),
+                                timestamp=timestamp,
+                                metadata={'measurement': measurement}
+                            )
+                            session.add(metric)
+                            logger.debug(f"Added system metric: {field_name}={field_value} from {origin}")
+            
+            # Get the primary value (either the 'value' field or the first numeric field)
             value = fields.get('value')
+            if value is None and fields:
+                # If no 'value' field, use the first numeric field
+                for field_name, field_value in fields.items():
+                    if isinstance(field_value, (int, float)):
+                        value = field_value
+                        if not metric_type:
+                            metric_type = field_name
+                        break
             
             # Convert ISO timestamp to datetime if present
             try:
@@ -106,22 +135,28 @@ def save_metric_data(data):
             timestamp = data.get('timestamp', datetime.now())
             metadata = data.get('metadata')
         
-        # Validate required fields
-        if not all([origin, metric_type, value is not None]):
+        # Validate required fields for the primary metric
+        if is_timeseries and 'value' not in fields and not any(isinstance(v, (int, float)) for v in fields.values()):
+            error_msg = "No numeric values found in metric data"
+            logger.error(f"[DB_ERROR] {error_msg} - origin: {origin}, fields: {fields}")
+            return {'error': error_msg}
+        elif not is_timeseries and not all([origin, metric_type, value is not None]):
             error_msg = "Missing required metric data fields"
             logger.error(f"[DB_ERROR] {error_msg} - origin: {origin}, metric_type: {metric_type}, value: {value}")
             return {'error': error_msg}
         
-        # Create metric record
-        metric = Metric(
-            origin=origin,
-            metric_type=metric_type,
-            value=float(value),
-            timestamp=timestamp,
-            metadata=metadata
-        )
-        
-        session.add(metric)
+        # Create primary metric record if we have the required fields
+        if all([origin, metric_type, value is not None]):
+            metric = Metric(
+                origin=origin,
+                metric_type=metric_type,
+                value=float(value),
+                timestamp=timestamp,
+                metadata=metadata
+            )
+            
+            session.add(metric)
+            logger.debug(f"Added primary metric: {metric_type}={value} from {origin}")
         
         # Save raw data for completeness
         raw_data = RawData(

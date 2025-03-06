@@ -82,6 +82,9 @@ def save_metric_data(data):
             
             origin = tags.get('origin')
             measurement = data.get('measurement')
+            
+            # Already moved this code above
+                
             if measurement == 'chess_game':
                 metric_type = tags.get('event_type')
             else:

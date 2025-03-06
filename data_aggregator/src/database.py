@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.exc import SQLAlchemyError
 import logging
 
-from models import Base, Game, Move, RawData
+from models import Base, Game, Move, RawData, Metric
 from chess_utils import derive_fen_from_moves, is_valid_fen, DEFAULT_FEN
 
 # Set up logging
@@ -33,6 +33,126 @@ def init_db():
     except SQLAlchemyError as e:
         logger.error(f"Error initializing database: {str(e)}")
         raise
+
+
+def save_metric_data(data):
+    """
+    Save generic metric data to the database.
+    
+    Args:
+        data (dict): Metric data in either format:
+            Format 1 (Flat):
+            {
+                'origin': str,          # Source of the metric
+                'metric_type': str,     # Type of metric
+                'value': float,         # Numeric value
+                'timestamp': datetime,  # Optional, defaults to now
+                'metadata': dict        # Optional additional context
+            }
+            
+            Format 2 (Timeseries):
+            {
+                'measurement': str,     # e.g., 'system_metrics'
+                'tags': {
+                    'origin': str,      # Source of the metric
+                    'metric_type': str  # Type of metric
+                },
+                'fields': {
+                    'value': float,     # Numeric value
+                    ...                 # Other fields
+                },
+                'timestamp': str        # ISO format timestamp
+            }
+            
+    Returns:
+        dict: Response with status information
+    """
+    session = Session()
+    try:
+        # Log the start of the database operation
+        logger.info(f"[DB_OPERATION_START] Saving metric data to database")
+        
+        # Check if data is in timeseries format
+        is_timeseries = all(key in data for key in ['measurement', 'tags', 'fields'])
+        
+        if is_timeseries:
+            # Extract data from timeseries format
+            tags = data.get('tags', {})
+            fields = data.get('fields', {})
+            
+            origin = tags.get('origin')
+            measurement = data.get('measurement')
+            if measurement == 'chess_game':
+                metric_type = tags.get('event_type')
+            else:
+                metric_type = tags.get('metric_type')
+            value = fields.get('value')
+            
+            # Convert ISO timestamp to datetime if present
+            try:
+                timestamp = datetime.fromisoformat(data.get('timestamp').replace('Z', '+00:00'))
+            except (ValueError, AttributeError):
+                timestamp = datetime.now()
+                
+            # Include any additional fields as metadata
+            metadata = {k: v for k, v in fields.items() if k != 'value'}
+            if not metadata:
+                metadata = None
+        else:
+            # Extract data from flat format
+            origin = data.get('origin')
+            metric_type = data.get('metric_type')
+            value = data.get('value')
+            timestamp = data.get('timestamp', datetime.now())
+            metadata = data.get('metadata')
+        
+        # Validate required fields
+        if not all([origin, metric_type, value is not None]):
+            error_msg = "Missing required metric data fields"
+            logger.error(f"[DB_ERROR] {error_msg} - origin: {origin}, metric_type: {metric_type}, value: {value}")
+            return {'error': error_msg}
+        
+        # Create metric record
+        metric = Metric(
+            origin=origin,
+            metric_type=metric_type,
+            value=float(value),
+            timestamp=timestamp,
+            metadata=metadata
+        )
+        
+        session.add(metric)
+        
+        # Save raw data for completeness
+        raw_data = RawData(
+            measurement='metric' if not is_timeseries else data.get('measurement'),
+            data=data,
+            received_timestamp=datetime.now(),
+            system_timestamp=timestamp
+        )
+        session.add(raw_data)
+        
+        session.commit()
+        logger.info(f"[DB_OPERATION_END] Successfully saved metric data to database")
+        
+        return {
+            'message': 'Metric data saved successfully to database',
+            'timestamp': datetime.now().isoformat(),
+            'id': metric.id
+        }
+        
+    except SQLAlchemyError as e:
+        session.rollback()
+        error_msg = str(e)
+        logger.error(f"[DB_ERROR] Database error: {error_msg}")
+        return {'error': error_msg}
+    except Exception as e:
+        session.rollback()
+        error_msg = str(e)
+        logger.error(f"[DB_ERROR] Error processing metric data: {error_msg}")
+        return {'error': error_msg}
+    finally:
+        session.close()
 
 
 def save_chess_data(data):
@@ -70,6 +190,32 @@ def save_chess_data(data):
                 pass
                 
         session.add(raw_data)
+        
+        # Handle system metrics data if applicable
+        if data.get('measurement') == 'system_metrics' and 'fields' in data:
+            fields = data.get('fields', {})
+            system_timestamp = raw_data.system_timestamp or datetime.now()
+            origin = data.get('tags', {}).get('host', 'unknown')
+            
+            # Convert each field to a metric record
+            for metric_name, metric_value in fields.items():
+                try:
+                    # Skip non-numeric values
+                    if not isinstance(metric_value, (int, float)):
+                        continue
+                        
+                    metric = Metric(
+                        origin=origin,
+                        metric_type=metric_name,
+                        value=float(metric_value),
+                        timestamp=system_timestamp,
+                        metadata={'measurement': 'system_metrics'}
+                    )
+                    session.add(metric)
+                except Exception as e:
+                    logger.warning(f"[DB_METRIC_ERROR] Could not save metric {metric_name}: {str(e)}")
+            
+            logger.info(f"[DB_SYSTEM_METRICS] Processed system metrics for {origin}")
         
         # Process chess game data if applicable
         if data.get('measurement') == 'chess_game' and 'tags' in data:
@@ -185,4 +331,3 @@ def save_chess_data(data):
         return {'error': error_msg}
     finally:
         session.close()
-

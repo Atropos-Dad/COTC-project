@@ -1,6 +1,6 @@
 {
   "server": {
-    "host": "localhost",
+    "host": "0.0.0.0",
     "port": 5000
   },
   "logging_config": {
@@ -16,16 +16,12 @@
       "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
       "date_format": "%Y-%m-%d %H:%M:%S",
       "log_dir": "logs",
-      "filename": "data_collector.log",
+      "filename": "data_aggregator.log",
       "max_bytes": 10485760,
       "backup_count": 5
     }
   },
-  "metrics": {
-    "system_metrics_interval_seconds": 15.0,
-    "endpoints": {
-      "system_metrics": "ws://localhost:5000/ws/metrics",
-      "game_metrics": "ws://localhost:5000/ws/game_metrics"
-    }
+  "dashboard": {
+    "update_interval_seconds": 5.0
   }
 }

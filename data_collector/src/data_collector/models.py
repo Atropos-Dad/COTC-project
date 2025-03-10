@@ -1,10 +1,50 @@
 import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Protocol, runtime_checkable
 import json
+import socket
 
 logger = logging.getLogger(__name__)
+
+@runtime_checkable
+class MetricsGenerator(Protocol):
+    """Protocol for all metrics generators."""
+    async def generate_metrics(self):
+        """Generate metrics asynchronously.
+        
+        This method should be an async generator that yields metric data
+        in the common metric format.
+        """
+        ...
+
+@dataclass
+class GenericMetric:
+    """Standard representation of a metric for all collectors."""
+    origin: str                  # Source of the metric (e.g., hostname, 'lichess')
+    metric_type: str             # Type of metric (e.g., 'cpu_percent', 'game_state')
+    value: float                 # Numeric value
+    timestamp: datetime          # When the metric was collected
+    metadata: Optional[Dict[str, Any]] = None  # Additional context
+    
+    def to_timeseries_format(self) -> Dict[str, Any]:
+        """Convert to a format suitable for time series DB."""
+        fields = {'value': self.value}
+        if self.metadata:
+            # Add metadata as additional fields if they are numeric types
+            for key, value in self.metadata.items():
+                if isinstance(value, (int, float, bool)):
+                    fields[key] = value
+        
+        return {
+            'measurement': 'system_metrics',
+            'tags': {
+                'origin': self.origin,
+                'metric_type': self.metric_type
+            },
+            'fields': fields,
+            'timestamp': self.timestamp.isoformat()
+        }
 
 @dataclass
 class Player:
@@ -99,14 +139,28 @@ class ChessGameMetrics:
 
 @dataclass
 class SystemMetrics:
-    """Represents system performance metrics."""
+    """Comprehensive system performance metrics."""
     timestamp: datetime
+    cpu_count_physical: int
+    cpu_count_logical: int
     cpu_percent: float
+    memory_total: int
+    memory_available: int
     memory_percent: float
-    disk_usage_percent: float
     network_bytes_sent: int
     network_bytes_recv: int
     process_count: int
+    platform_info: str
+    python_version: str
+    cpu_temp: Optional[float] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert the SystemMetrics instance to a dictionary."""
+        return asdict(self)
+    
+    def to_json(self) -> str:
+        """Convert the SystemMetrics instance to a JSON string."""
+        return json.dumps(self.to_dict(), default=str)
     
     def to_timeseries_data(self) -> Dict[str, Any]:
         """Convert to a format suitable for time series DB."""
@@ -117,39 +171,45 @@ class SystemMetrics:
                 "fields": {
                     "cpu_percent": self.cpu_percent,
                     "memory_percent": self.memory_percent,
-                    "disk_usage_percent": self.disk_usage_percent,
                     "network_bytes_sent": self.network_bytes_sent,
                     "network_bytes_recv": self.network_bytes_recv,
                     "process_count": self.process_count
                 }
             }
-            logger.debug("System metrics: CPU: %.1f%%, Memory: %.1f%%, Disk: %.1f%%",
-                      self.cpu_percent, self.memory_percent, self.disk_usage_percent)
+            
+            # Add CPU temperature if available
+            if self.cpu_temp is not None:
+                data["fields"]["cpu_temp"] = self.cpu_temp
+                
+            logger.debug("System metrics: CPU: %.1f%%, Memory: %.1f%%",
+                      self.cpu_percent, self.memory_percent)
             return data
         except Exception as e:
             logger.exception("Error converting system metrics to timeseries data")
             raise
-
-@dataclass
-class SystemMetrics:
-    cpu_count_physical: int
-    cpu_count_logical: int
-    cpu_percent: float
-    cpu_temp: float
-    memory_total: int
-    memory_available: int
-    memory_percent: float
-    disk_usage: Dict[str, Dict[str, Any]]
-    platform_info: str
-    python_version: str
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert the SystemMetrics instance to a dictionary."""
-        return asdict(self)
     
-    def to_json(self) -> str:
-        """Convert the SystemMetrics instance to a JSON string."""
-        return json.dumps(self.to_dict())
+    def to_generic_metrics(self) -> List[GenericMetric]:
+        """Convert to a list of GenericMetric objects."""
+        hostname = socket.gethostname()
+        
+        # Define basic metrics mapping
+        basic_metrics = {
+            'cpu_percent': self.cpu_percent,
+            'memory_percent': self.memory_percent,
+            'process_count': self.process_count,
+            'network_bytes_sent': self.network_bytes_sent,
+            'network_bytes_recv': self.network_bytes_recv,
+            'cpu_temp': self.cpu_temp
+        }
+        
+        # Generate metrics for non-None values
+        metrics = [
+            GenericMetric(origin=hostname, metric_type=metric_type, value=value, timestamp=self.timestamp)
+            for metric_type, value in basic_metrics.items()
+            if value is not None
+        ]
+        
+        return metrics
     
     @classmethod
     def from_json(cls, json_str: str) -> 'SystemMetrics':

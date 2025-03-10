@@ -2,7 +2,7 @@
 Dashboard module for visualizing chess data in real-time.
 """
 import dash
-from dash import dcc, html, callback, Output, Input, clientside_callback
+from dash import dcc, html, callback, Output, Input, clientside_callback, State
 import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
@@ -12,11 +12,13 @@ from sqlalchemy import func, desc
 from sqlalchemy.sql import text
 import re
 import logging
+import json
+import requests
 
 # Initialize logger
 logger = logging.getLogger(__name__)
 
-from models import Game, Move, RawData
+from models import Game, Move, RawData, Metric, MetricType, MetricOrigin, TimeZoneSource, Player
 from database import Session
 from chess_utils import is_valid_fen, derive_fen_from_moves, DEFAULT_FEN
 
@@ -29,6 +31,7 @@ dash_app = dash.Dash(
     ],
     suppress_callback_exceptions=True,
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
+    url_base_pathname='/dash/',
     external_scripts=[
         "https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js",
         "https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js",
@@ -116,6 +119,261 @@ dash_app.layout = dbc.Container([
         ], width=12)
     ]),
     
+    # System Metrics Section
+    dbc.Row([
+        dbc.Col([
+            html.H2("System Metrics", className="mt-4 mb-3")
+        ], width=12)
+    ]),
+    
+    # All Metrics Table Section
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("All Metrics"),
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Filter by Origin:"),
+                            dcc.Dropdown(
+                                id="metrics-origin-filter",
+                                options=[],
+                                placeholder="Select origin...",
+                                clearable=True
+                            )
+                        ], width=4),
+                        dbc.Col([
+                            html.Label("Filter by Metric Type:"),
+                            dcc.Dropdown(
+                                id="metrics-type-filter",
+                                options=[],
+                                placeholder="Select metric type...",
+                                clearable=True
+                            )
+                        ], width=4),
+                        dbc.Col([
+                            html.Label("Records per page:"),
+                            dcc.Dropdown(
+                                id="metrics-page-size",
+                                options=[
+                                    {"label": "10", "value": 10},
+                                    {"label": "25", "value": 25},
+                                    {"label": "50", "value": 50},
+                                    {"label": "100", "value": 100}
+                                ],
+                                value=25,
+                                clearable=False
+                            )
+                        ], width=4)
+                    ], className="mb-3"),
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Filter by Date Range:"),
+                            dcc.DatePickerRange(
+                                id="metrics-date-range",
+                                start_date_placeholder_text="Start Date",
+                                end_date_placeholder_text="End Date",
+                                clearable=True,
+                                with_portal=True,
+                                className="mb-3"
+                            )
+                        ], width=12)
+                    ]),
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Filter by Value Range:"),
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Input(
+                                        id="metrics-min-value",
+                                        type="number",
+                                        placeholder="Min Value",
+                                        step="any"
+                                    )
+                                ], width=6),
+                                dbc.Col([
+                                    dbc.Input(
+                                        id="metrics-max-value",
+                                        type="number",
+                                        placeholder="Max Value",
+                                        step="any"
+                                    )
+                                ], width=6)
+                            ]),
+                            html.Small("Set min and max to filter by range", className="text-muted")
+                        ], width=6, className="mb-3"),
+                        dbc.Col([
+                            html.Label("Search Exact Value:"),
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Input(
+                                        id="metrics-exact-value",
+                                        type="number",
+                                        placeholder="Exact Value",
+                                        step="any"
+                                    )
+                                ], width=7),
+                                dbc.Col([
+                                    dbc.Input(
+                                        id="metrics-value-tolerance",
+                                        type="number",
+                                        placeholder="±Tolerance",
+                                        step="any",
+                                        min=0
+                                    )
+                                ], width=5)
+                            ]),
+                            html.Small("Add tolerance for fuzzy matching", className="text-muted")
+                        ], width=6, className="mb-3")
+                    ]),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Button("Reset Filters", id="reset-metrics-filters", color="secondary", size="sm", className="mb-3 me-2"),
+                            dbc.Button("Apply Filters", id="apply-metrics-filters", color="primary", size="sm", className="mb-3")
+                        ], width=12)
+                    ]),
+                    html.Div(id="all-metrics-table"),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Pagination(
+                                id="metrics-pagination",
+                                max_value=5,
+                                first_last=True,
+                                previous_next=True,
+                                active_page=1,
+                                step=2,
+                                fully_expanded=False
+                            )
+                        ], width=12, className="d-flex justify-content-center mt-3")
+                    ])
+                ])
+            ], className="mb-4")
+        ], width=12)
+    ]),
+    
+    # Message to Clients Section
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Send Message to Clients"),
+                dbc.CardBody([
+                    dbc.Input(id="client-message", placeholder="Enter message for clients...", type="text"),
+                    dbc.Button("Send Message", id="send-message-button", color="primary", className="mt-2")
+                ])
+            ], className="mb-4")
+        ], width=12)
+    ]),
+    
+    # Current System Metrics
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("CPU Usage"),
+                dbc.CardBody([
+                    html.Div(id="current-cpu", className="text-center h3"),
+                    html.Div("percent", className="text-center text-muted")
+                ])
+            ], className="mb-4")
+        ], width=3),
+        
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Memory Usage"),
+                dbc.CardBody([
+                    html.Div(id="current-memory", className="text-center h3"),
+                    html.Div("percent", className="text-center text-muted")
+                ])
+            ], className="mb-4")
+        ], width=3),
+        
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Process Count"),
+                dbc.CardBody([
+                    html.Div(id="current-processes", className="text-center h3"),
+                    html.Div("processes", className="text-center text-muted")
+                ])
+            ], className="mb-4")
+        ], width=2),
+        
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("White Pieces"),
+                dbc.CardBody([
+                    html.Div(id="current-white-pieces", className="text-center h3"),
+                    html.Div("pieces", className="text-center text-muted")
+                ])
+            ], className="mb-4")
+        ], width=2),
+        
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Black Pieces"),
+                dbc.CardBody([
+                    html.Div(id="current-black-pieces", className="text-center h3"),
+                    html.Div("pieces", className="text-center text-muted")
+                ])
+            ], className="mb-4")
+        ], width=2)
+    ]),
+    
+    # CPU and Memory Usage
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("CPU Usage Over Time"),
+                dbc.CardBody([
+                    dcc.Graph(id="cpu-usage-graph")
+                ])
+            ], className="mb-4")
+        ], width=6),
+        
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Memory Usage Over Time"),
+                dbc.CardBody([
+                    dcc.Graph(id="memory-usage-graph")
+                ])
+            ], className="mb-4")
+        ], width=6)
+    ]),
+    
+    # Network Usage
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Network Traffic"),
+                dbc.CardBody([
+                    dcc.Graph(id="network-traffic-graph")
+                ])
+            ], className="mb-4")
+        ], width=12),
+    ]),
+    
+    # Combined System Metrics
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Combined System Metrics"),
+                dbc.CardBody([
+                    dcc.Graph(id="combined-metrics-graph")
+                ])
+            ], className="mb-4")
+        ], width=12)
+    ]),
+    
+    # Chess Piece Counts
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Chess Piece Counts Over Time"),
+                dbc.CardBody([
+                    dcc.Graph(id="chess-pieces-graph")
+                ])
+            ], className="mb-4")
+        ], width=12)
+    ]),
+    
     dbc.Row([
         dbc.Col([
             dbc.Card([
@@ -145,9 +403,14 @@ dash_app.layout = dbc.Container([
                         dcc.Dropdown(
                             id='game-selector',
                             placeholder="Select a game...",
-                            style={'width': '250px'}
+                            style={
+                                'width': '500px',  # Increased width
+                                'min-width': '300px',  # Minimum width
+                                'white-space': 'normal',  # Allow text to wrap
+                                'text-overflow': 'ellipsis'  # Add ellipsis for overflow
+                            }
                         )
-                    ])
+                    ], style={'min-width': '500px'})  # Container div width
                 ], className="d-flex justify-content-between align-items-center"),
                 dbc.CardBody([
                     dbc.Row([
@@ -187,10 +450,13 @@ def update_games_count(n):
         
         # Get games with moves in the last 5 minutes
         five_min_ago = datetime.now() - timedelta(minutes=5)
-        active_games = session.query(func.count(func.distinct(Move.game_id)))\
+        active_games = session.query(func.count(func.distinct(Move.game_id))) \
             .filter(Move.timestamp > five_min_ago).scalar()
         
         return f"{total_games}", f"{active_games} active in last 5 min"
+    except Exception as e:
+        logger.error(f"Error updating games count: {str(e)}")
+        return "Error", "Error"
     finally:
         session.close()
 
@@ -203,7 +469,7 @@ def update_data_rate(n):
     session = Session()
     try:
         one_min_ago = datetime.now() - timedelta(minutes=1)
-        events_last_minute = session.query(func.count(RawData.id))\
+        events_last_minute = session.query(func.count(RawData.id)) \
             .filter(RawData.received_timestamp > one_min_ago).scalar()
         
         return f"{events_last_minute}"
@@ -218,7 +484,7 @@ def update_data_rate(n):
 def update_latest_event(n):
     session = Session()
     try:
-        latest_event = session.query(RawData)\
+        latest_event = session.query(RawData) \
             .order_by(desc(RawData.received_timestamp)).first()
         
         if latest_event:
@@ -374,9 +640,9 @@ def update_events_distribution(n):
 def update_recent_games(n):
     session = Session()
     try:
-        # Get 5 most recent games
-        recent_games = session.query(Game)\
-            .order_by(desc(Game.start_time))\
+        # Get 5 most recent games with player names
+        recent_games = session.query(Game) \
+            .order_by(desc(Game.start_time)) \
             .limit(5).all()
         
         if not recent_games:
@@ -396,7 +662,7 @@ def update_recent_games(n):
         rows = []
         for game in recent_games:
             # Count moves for this game
-            move_count = session.query(func.count(Move.id))\
+            move_count = session.query(func.count(Move.id)) \
                 .filter(Move.game_id == game.game_id).scalar()
             
             # Format time
@@ -408,10 +674,14 @@ def update_recent_games(n):
             else:
                 time_str = f"{time_diff.seconds // 60}m ago"
             
+            # Get player names as strings
+            white_name = game.white_player.name if game.white_player else "Unknown"
+            black_name = game.black_player.name if game.black_player else "Unknown"
+            
             rows.append(html.Tr([
                 html.Td(game.game_id),
-                html.Td(game.white_player or "Unknown"),
-                html.Td(game.black_player or "Unknown"),
+                html.Td(white_name),
+                html.Td(black_name),
                 html.Td(time_str),
                 html.Td(move_count)
             ]))
@@ -441,22 +711,40 @@ def update_game_selector(n):
         ten_min_ago = datetime.now() - timedelta(minutes=10)
         
         # Get game_id and player info for games with recent moves
-        active_games = session.query(Game.game_id, Game.white_player, Game.black_player)\
-            .join(Move, Game.game_id == Move.game_id)\
-            .filter(Move.timestamp > ten_min_ago)\
-            .group_by(Game.game_id)\
-            .all()
+        # Include the most recent move timestamp for sorting
+        active_games = session.query(
+            Game.game_id,
+            Game.white_player_id,
+            Game.black_player_id,
+            func.max(Move.timestamp).label('last_move_time')  # Get the most recent move timestamp
+        ).join(Move, Game.game_id == Move.game_id) \
+         .filter(Move.timestamp > ten_min_ago) \
+         .group_by(Game.game_id, Game.white_player_id, Game.black_player_id) \
+         .order_by(desc('last_move_time')) \
+         .all()
         
         if not active_games:
             return []
         
         # Format options for dropdown
         options = []
-        for game_id, white, black in active_games:
-            white_name = white or "Unknown"
-            black_name = black or "Unknown"
+        for game_id, white_player_id, black_player_id, last_move_time in active_games:
+            # Get player names from the database
+            white_player = session.query(Player).filter(Player.id == white_player_id).first() if white_player_id else None
+            black_player = session.query(Player).filter(Player.id == black_player_id).first() if black_player_id else None
+            
+            white_name = white_player.name if white_player else "Unknown"
+            black_name = black_player.name if black_player else "Unknown"
+            
+            # Format the time difference
+            time_diff = datetime.now() - last_move_time
+            if time_diff.seconds < 60:
+                time_str = f"{time_diff.seconds}s ago"
+            else:
+                time_str = f"{time_diff.seconds // 60}m ago"
+            
             options.append({
-                "label": f"{white_name} vs {black_name} ({game_id})",
+                "label": f"{white_name} vs {black_name} ({game_id}) - {time_str}",
                 "value": game_id
             })
         
@@ -548,7 +836,7 @@ def update_chess_board(selected_game_id, n):
             return DEFAULT_FEN, [], "White: Select a game", "Black: Select a game", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
         
         # Get moves for this game, ordered by timestamp
-        moves = session.query(Move).filter(Move.game_id == selected_game_id)\
+        moves = session.query(Move).filter(Move.game_id == selected_game_id) \
             .order_by(Move.timestamp).all()
         
         debug_info.append(f"Found {len(moves)} moves for game {selected_game_id}")
@@ -556,7 +844,7 @@ def update_chess_board(selected_game_id, n):
         if not moves:
             logger.debug(f"No moves found for game {selected_game_id}, using DEFAULT_FEN")
             debug_info.append(f"No moves found, using DEFAULT_FEN")
-            return DEFAULT_FEN, [], f"White: {game.white_player or 'Unknown'}", f"Black: {game.black_player or 'Unknown'}", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
+            return DEFAULT_FEN, [], f"White: {game.white_player.name if game.white_player else 'Unknown'}", f"Black: {game.black_player.name if game.black_player else 'Unknown'}", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
         
         # Get the latest FEN position or derive it from moves
         latest_move = moves[-1]
@@ -588,17 +876,13 @@ def update_chess_board(selected_game_id, n):
                 current_fen = DEFAULT_FEN
         
         # Format player info
-        white_info = f"White: {game.white_player or 'Unknown'}"
-        if game.white_rating:
-            white_info += f" ({game.white_rating})"
-        if game.white_title:
-            white_info = f"{game.white_title} {white_info}"
+        white_info = f"White: {game.white_player.name if game.white_player else 'Unknown'}"
+        if game.white_player and game.white_player.title:
+            white_info = f"{game.white_player.title} {white_info}"
             
-        black_info = f"Black: {game.black_player or 'Unknown'}"
-        if game.black_rating:
-            black_info += f" ({game.black_rating})"
-        if game.black_title:
-            black_info = f"{game.black_title} {black_info}"
+        black_info = f"Black: {game.black_player.name if game.black_player else 'Unknown'}"
+        if game.black_player and game.black_player.title:
+            black_info = f"{game.black_player.title} {black_info}"
         
         # Create move history display
         move_history_items = []
@@ -642,6 +926,753 @@ def update_chess_board(selected_game_id, n):
         return DEFAULT_FEN, [], "Error", "Error", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
     finally:
         session.close()
+
+# Add callback for current system metrics
+@callback(
+    [Output("current-cpu", "children"),
+     Output("current-memory", "children"),
+     Output("current-processes", "children"),
+     Output("current-white-pieces", "children"),
+     Output("current-black-pieces", "children")],
+    [Input("interval-component", "n_intervals")]
+)
+def update_current_system_metrics(n):
+    session = Session()
+    try:
+        # Get the most recent metrics for each type
+        cpu_metric = session.query(Metric) \
+            .join(MetricType) \
+            .filter(MetricType.name == 'cpu_percent') \
+            .order_by(Metric.timestamp.desc()) \
+            .first()
+        
+        memory_metric = session.query(Metric) \
+            .join(MetricType) \
+            .filter(MetricType.name == 'memory_percent') \
+            .order_by(Metric.timestamp.desc()) \
+            .first()
+        
+        process_metric = session.query(Metric) \
+            .join(MetricType) \
+            .filter(MetricType.name == 'process_count') \
+            .order_by(Metric.timestamp.desc()) \
+            .first()
+            
+        white_pieces_metric = session.query(Metric) \
+            .join(MetricType) \
+            .filter(MetricType.name == 'white_pieces') \
+            .order_by(Metric.timestamp.desc()) \
+            .first()
+            
+        black_pieces_metric = session.query(Metric) \
+            .join(MetricType) \
+            .filter(MetricType.name == 'black_pieces') \
+            .order_by(Metric.timestamp.desc()) \
+            .first()
+        
+        # Format the values
+        cpu_value = f"{cpu_metric.value:.1f}%" if cpu_metric else "N/A"
+        memory_value = f"{memory_metric.value:.1f}%" if memory_metric else "N/A"
+        process_value = f"{int(process_metric.value)}" if process_metric else "N/A"
+        white_pieces_value = f"{int(white_pieces_metric.value)}" if white_pieces_metric else "N/A"
+        black_pieces_value = f"{int(black_pieces_metric.value)}" if black_pieces_metric else "N/A"
+        
+        return cpu_value, memory_value, process_value, white_pieces_value, black_pieces_value
+    except Exception as e:
+        logger.exception(f"Error updating current system metrics: {str(e)}")
+        return "Error", "Error", "Error", "Error", "Error"
+    finally:
+        session.close()
+
+# Add callback for CPU usage graph
+@callback(
+    Output("cpu-usage-graph", "figure"),
+    [Input("interval-component", "n_intervals")]
+)
+def update_cpu_usage_graph(n):
+    session = Session()
+    try:
+        # Get CPU usage data for the last hour
+        one_hour_ago = datetime.now() - timedelta(hours=1)
+        cpu_metrics = session.query(
+            Metric.timestamp, 
+            Metric.value, 
+            MetricOrigin.name.label('origin')
+        ).join(MetricType).join(MetricOrigin)\
+            .filter(MetricType.name == 'cpu_percent')\
+            .filter(Metric.timestamp > one_hour_ago)\
+            .order_by(Metric.timestamp).all()
+        
+        if not cpu_metrics:
+            # Return empty figure if no data
+            return go.Figure().update_layout(
+                title="No CPU usage data available",
+                xaxis_title="Time",
+                yaxis_title="CPU Usage (%)"
+            )
+        
+        # Create dataframe from metrics
+        data = []
+        for metric in cpu_metrics:
+            data.append({
+                'timestamp': metric.timestamp,
+                'cpu_percent': metric.value,
+                'origin': metric.origin
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Create the figure with color differentiation by origin (hostname)
+        fig = px.line(df, x='timestamp', y='cpu_percent', color='origin',
+                      title="CPU Usage Over Time")
+        fig.update_layout(
+            xaxis_title="Time",
+            yaxis_title="CPU Usage (%)",
+            yaxis=dict(range=[0, 100])
+        )
+        return fig
+    except Exception as e:
+        logger.exception(f"Error updating CPU usage graph: {str(e)}")
+        return go.Figure().update_layout(
+            title=f"Error: {str(e)}",
+            xaxis_title="Time",
+            yaxis_title="CPU Usage (%)"
+        )
+    finally:
+        session.close()
+
+# Add callback for Memory usage graph
+@callback(
+    Output("memory-usage-graph", "figure"),
+    [Input("interval-component", "n_intervals")]
+)
+def update_memory_usage_graph(n):
+    session = Session()
+    try:
+        # Get memory usage data for the last hour
+        one_hour_ago = datetime.now() - timedelta(hours=1)
+        memory_metrics = session.query(
+            Metric.timestamp, 
+            Metric.value, 
+            MetricOrigin.name.label('origin')
+        ).join(MetricType).join(MetricOrigin)\
+            .filter(MetricType.name == 'memory_percent')\
+            .filter(Metric.timestamp > one_hour_ago)\
+            .order_by(Metric.timestamp).all()
+        
+        if not memory_metrics:
+            # Return empty figure if no data
+            return go.Figure().update_layout(
+                title="No memory usage data available",
+                xaxis_title="Time",
+                yaxis_title="Memory Usage (%)"
+            )
+        
+        # Create dataframe from metrics
+        data = []
+        for metric in memory_metrics:
+            data.append({
+                'timestamp': metric.timestamp,
+                'memory_percent': metric.value,
+                'origin': metric.origin
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Create the figure with color differentiation by origin (hostname)
+        fig = px.line(df, x='timestamp', y='memory_percent', color='origin',
+                      title="Memory Usage Over Time")
+        fig.update_layout(
+            xaxis_title="Time",
+            yaxis_title="Memory Usage (%)",
+            yaxis=dict(range=[0, 100])
+        )
+        return fig
+    except Exception as e:
+        logger.exception(f"Error updating memory usage graph: {str(e)}")
+        return go.Figure().update_layout(
+            title=f"Error: {str(e)}",
+            xaxis_title="Time",
+            yaxis_title="Memory Usage (%)"
+        )
+    finally:
+        session.close()
+
+# Add callback for Network traffic graph
+@callback(
+    Output("network-traffic-graph", "figure"),
+    [Input("interval-component", "n_intervals")]
+)
+def update_network_traffic_graph(n):
+    session = Session()
+    try:
+        # Get network traffic data for the last hour
+        one_hour_ago = datetime.now() - timedelta(hours=1)
+        
+        # Get network metrics - using the exact metric_type from the logs
+        network_metrics = session.query(
+            Metric.timestamp, 
+            Metric.value, 
+            MetricOrigin.name.label('origin'),
+            MetricType.name.label('metric_type')
+        ).join(MetricType).join(MetricOrigin)\
+            .filter(MetricType.name.in_(['network_bytes_sent', 'network_bytes_recv']))\
+            .filter(Metric.timestamp > one_hour_ago)\
+            .order_by(Metric.timestamp).all()
+        
+        if not network_metrics:
+            # Return empty figure if no data
+            return go.Figure().update_layout(
+                title="No network traffic data available",
+                xaxis_title="Time",
+                yaxis_title="Network Traffic (bytes)"
+            )
+        
+        # Create dataframe
+        data = []
+        for metric in network_metrics:
+            data.append({
+                'timestamp': metric.timestamp,
+                'value': metric.value,
+                'origin': metric.origin,
+                'metric_type': metric.metric_type
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Create the figure with multiple traces
+        fig = go.Figure()
+        
+        # Group by origin and metric_type
+        for (origin, metric_type), group_df in df.groupby(['origin', 'metric_type']):
+            name = f"{origin} - {metric_type.replace('network_bytes_', '')}"
+            color = 'blue' if 'sent' in metric_type else 'green'
+            
+            fig.add_trace(go.Scatter(
+                x=group_df['timestamp'],
+                y=group_df['value'],
+                mode='lines',
+                name=name,
+                line=dict(color=color if 'sent' in metric_type else None)
+            ))
+        
+        # Format y-axis to show in MB
+        fig.update_layout(
+            title="Network Traffic Over Time",
+            xaxis_title="Time",
+            yaxis_title="Network Traffic (bytes)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            yaxis=dict(
+                tickformat=".2s"  # Use SI prefix formatting (K, M, G, etc.)
+            )
+        )
+        return fig
+    except Exception as e:
+        logger.exception(f"Error updating network traffic graph: {str(e)}")
+        return go.Figure().update_layout(
+            title=f"Error: {str(e)}",
+            xaxis_title="Time",
+            yaxis_title="Network Traffic (bytes)"
+        )
+    finally:
+        session.close()
+
+# Add callback for combined system metrics graph
+@callback(
+    Output("combined-metrics-graph", "figure"),
+    [Input("interval-component", "n_intervals")]
+)
+def update_combined_metrics_graph(n):
+    session = Session()
+    try:
+        # Get data for the last hour for multiple metrics
+        one_hour_ago = datetime.now() - timedelta(hours=1)
+        
+        # Query for CPU, memory, and process count metrics
+        metrics = session.query(
+            Metric.timestamp, 
+            MetricType.name.label('metric_type'), 
+            Metric.value, 
+            MetricOrigin.name.label('origin')
+        ).join(MetricType).join(MetricOrigin)\
+            .filter(MetricType.name.in_(['cpu_percent', 'memory_percent', 'process_count']))\
+            .filter(Metric.timestamp > one_hour_ago)\
+            .order_by(Metric.timestamp).all()
+        
+        if not metrics:
+            # Return empty figure if no data
+            return go.Figure().update_layout(
+                title="No system metrics data available",
+                xaxis_title="Time",
+                yaxis_title="Value"
+            )
+        
+        # Create dataframe from metrics
+        data = []
+        for metric in metrics:
+            data.append({
+                'timestamp': metric.timestamp,
+                'metric_type': metric.metric_type,
+                'value': metric.value,
+                'origin': metric.origin
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Create a figure with multiple y-axes
+        fig = go.Figure()
+        
+        # Add CPU percent trace
+        cpu_df = df[df['metric_type'] == 'cpu_percent']
+        if not cpu_df.empty:
+            for origin, group in cpu_df.groupby('origin'):
+                fig.add_trace(go.Scatter(
+                    x=group['timestamp'],
+                    y=group['value'],
+                    mode='lines',
+                    name=f'CPU ({origin})',
+                    line=dict(color='red')
+                ))
+        
+        # Add memory percent trace
+        memory_df = df[df['metric_type'] == 'memory_percent']
+        if not memory_df.empty:
+            for origin, group in memory_df.groupby('origin'):
+                fig.add_trace(go.Scatter(
+                    x=group['timestamp'],
+                    y=group['value'],
+                    mode='lines',
+                    name=f'Memory ({origin})',
+                    line=dict(color='blue')
+                ))
+        
+        # Add process count trace with secondary y-axis
+        process_df = df[df['metric_type'] == 'process_count']
+        if not process_df.empty:
+            for origin, group in process_df.groupby('origin'):
+                fig.add_trace(go.Scatter(
+                    x=group['timestamp'],
+                    y=group['value'],
+                    mode='lines',
+                    name=f'Processes ({origin})',
+                    line=dict(color='green'),
+                    yaxis='y2'
+                ))
+        
+        # Update layout with secondary y-axis
+        fig.update_layout(
+            title="Combined System Metrics",
+            xaxis_title="Time",
+            yaxis=dict(
+                title="Percentage (%)",
+                range=[0, 100]
+            ),
+            yaxis2=dict(
+                title="Process Count",
+                overlaying='y',
+                side='right'
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+        
+        return fig
+    except Exception as e:
+        logger.exception(f"Error updating combined metrics graph: {str(e)}")
+        return go.Figure().update_layout(
+            title=f"Error: {str(e)}",
+            xaxis_title="Time",
+            yaxis_title="Value"
+        )
+    finally:
+        session.close()
+
+# Add callback for chess piece counts graph
+@callback(
+    Output("chess-pieces-graph", "figure"),
+    [Input("interval-component", "n_intervals")]
+)
+def update_chess_pieces_graph(n):
+    session = Session()
+    try:
+        # Get chess piece count data for the last hour
+        one_hour_ago = datetime.now() - timedelta(hours=1)
+        
+        # Query for white_pieces and black_pieces metrics
+        piece_metrics = session.query(
+            Metric.timestamp, 
+            MetricType.name.label('metric_type'), 
+            Metric.value, 
+            MetricOrigin.name.label('origin')
+        ).join(MetricType).join(MetricOrigin)\
+            .filter(MetricType.name.in_(['white_pieces', 'black_pieces']))\
+            .filter(Metric.timestamp > one_hour_ago)\
+            .order_by(Metric.timestamp).all()
+        
+        if not piece_metrics:
+            # Return empty figure if no data
+            return go.Figure().update_layout(
+                title="No chess piece count data available",
+                xaxis_title="Time",
+                yaxis_title="Piece Count"
+            )
+        
+        # Create dataframe from metrics
+        data = []
+        for metric in piece_metrics:
+            data.append({
+                'timestamp': metric.timestamp,
+                'metric_type': metric.metric_type,
+                'value': metric.value,
+                'origin': metric.origin
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Create the figure
+        fig = go.Figure()
+        
+        # Add white pieces trace
+        white_df = df[df['metric_type'] == 'white_pieces']
+        if not white_df.empty:
+            for origin, group in white_df.groupby('origin'):
+                fig.add_trace(go.Scatter(
+                    x=group['timestamp'],
+                    y=group['value'],
+                    mode='lines',
+                    name=f'White Pieces ({origin})',
+                    line=dict(color='blue')
+                ))
+        
+        # Add black pieces trace
+        black_df = df[df['metric_type'] == 'black_pieces']
+        if not black_df.empty:
+            for origin, group in black_df.groupby('origin'):
+                fig.add_trace(go.Scatter(
+                    x=group['timestamp'],
+                    y=group['value'],
+                    mode='lines',
+                    name=f'Black Pieces ({origin})',
+                    line=dict(color='black')
+                ))
+        
+        # Update layout
+        fig.update_layout(
+            title="Chess Piece Counts Over Time",
+            xaxis_title="Time",
+            yaxis_title="Piece Count",
+            yaxis=dict(range=[0, 16]),  # Maximum of 16 pieces per side in chess
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+        
+        return fig
+    except Exception as e:
+        logger.exception(f"Error updating chess pieces graph: {str(e)}")
+        return go.Figure().update_layout(
+            title=f"Error: {str(e)}",
+            xaxis_title="Time",
+            yaxis_title="Piece Count"
+        )
+    finally:
+        session.close()
+
+# Callback for sending message to clients
+@callback(
+    Output("send-message-button", "disabled"),
+    [Input("send-message-button", "n_clicks")],
+    [State("client-message", "value")]
+)
+def send_message_to_clients(n_clicks, message):
+    if n_clicks is None or message is None or message.strip() == "":
+        return False
+
+    # Get current timestamp for the message
+    timestamp = datetime.now().isoformat()
+    
+    # Create message payload
+    payload = {
+        "message": message,
+        "timestamp": timestamp,
+        "type": "dashboard_message"
+    }
+    
+    # Send message to server API endpoint
+    try:
+        requests.post('http://localhost:5000/api/send_message', json=payload)
+        logger.info(f"Sent dashboard message: {message}")
+    except Exception as e:
+        logger.error(f"Failed to send dashboard message: {e}")
+    
+    # Re-enable the button
+    return False
+
+# Callback for all metrics table
+@callback(
+    Output("all-metrics-table", "children"),
+    [Input("interval-component", "n_intervals"),
+     Input("metrics-origin-filter", "value"),
+     Input("metrics-type-filter", "value"),
+     Input("metrics-pagination", "active_page"),
+     Input("metrics-page-size", "value"),
+     Input("metrics-date-range", "start_date"),
+     Input("metrics-date-range", "end_date"),
+     Input("metrics-min-value", "value"),
+     Input("metrics-max-value", "value"),
+     Input("metrics-exact-value", "value"),
+     Input("metrics-value-tolerance", "value")]
+)
+def update_all_metrics(n, origin_filter, type_filter, page, page_size, start_date, end_date, min_value, max_value, exact_value, tolerance):
+    if page_size is None:
+        page_size = 25
+    if page is None:
+        page = 1
+        
+    session = Session()
+    try:
+        # Build query with filters
+        query = session.query(
+            Metric.id,
+            MetricOrigin.name.label('origin'),
+            MetricType.name.label('metric_type'),
+            Metric.value,
+            Metric.timestamp,
+            TimeZoneSource.name.label('timezone')
+        ).join(MetricOrigin).join(MetricType).outerjoin(TimeZoneSource)
+        
+        if origin_filter:
+            query = query.filter(MetricOrigin.name == origin_filter)
+        if type_filter:
+            query = query.filter(MetricType.name == type_filter)
+        
+        # Apply date range filter if provided
+        if start_date:
+            start_datetime = datetime.strptime(start_date, '%Y-%m-%d')
+            query = query.filter(Metric.timestamp >= start_datetime)
+        if end_date:
+            # Add one day to include the end date fully
+            end_datetime = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+            query = query.filter(Metric.timestamp < end_datetime)
+            
+        # Apply value range filters if provided
+        if min_value is not None:
+            query = query.filter(Metric.value >= min_value)
+        if max_value is not None:
+            query = query.filter(Metric.value <= max_value)
+        
+        # Apply exact value filter with optional tolerance
+        if exact_value is not None:
+            if tolerance is not None and tolerance > 0:
+                # Use between for tolerance range
+                query = query.filter(Metric.value.between(exact_value - tolerance, exact_value + tolerance))
+            else:
+                # Use exact match
+                query = query.filter(Metric.value == exact_value)
+            
+        # Get total count for pagination
+        total_count = query.count()
+        
+        # Calculate offset for pagination
+        offset = (page - 1) * page_size
+        
+        # Get the metrics with pagination
+        metrics = query.order_by(desc(Metric.timestamp))\
+            .offset(offset).limit(page_size).all()
+        
+        if not metrics:
+            return html.Div("No metrics found with the current filters", className="text-center text-muted")
+        
+        # Create table
+        table_header = [
+            html.Thead(html.Tr([
+                html.Th("ID"),
+                html.Th("Origin"),
+                html.Th("Metric Type"),
+                html.Th("Value"),
+                html.Th("Timestamp"),
+                html.Th("Timezone")
+            ]))
+        ]
+        
+        rows = []
+        for metric in metrics:
+            # Format timestamp
+            timestamp_str = metric.timestamp.strftime("%Y-%m-%d %H:%M:%S") if metric.timestamp else "N/A"
+            
+            # Format value with 2 decimal places if it's a float
+            value_str = f"{metric.value:.2f}" if isinstance(metric.value, float) else str(metric.value)
+            
+            rows.append(html.Tr([
+                html.Td(metric.id),
+                html.Td(metric.origin),
+                html.Td(metric.metric_type),
+                html.Td(value_str),
+                html.Td(timestamp_str),
+                html.Td(metric.timezone or "UTC")
+            ]))
+        
+        table_body = [html.Tbody(rows)]
+        
+        return dbc.Table(
+            table_header + table_body,
+            bordered=True,
+            hover=True,
+            responsive=True,
+            striped=True,
+            size="sm"
+        )
+    finally:
+        session.close()
+
+# Callback to update pagination max value
+@callback(
+    Output("metrics-pagination", "max_value"),
+    [Input("interval-component", "n_intervals"),
+     Input("metrics-origin-filter", "value"),
+     Input("metrics-type-filter", "value"),
+     Input("metrics-page-size", "value"),
+     Input("metrics-date-range", "start_date"),
+     Input("metrics-date-range", "end_date"),
+     Input("metrics-min-value", "value"),
+     Input("metrics-max-value", "value"),
+     Input("metrics-exact-value", "value"),
+     Input("metrics-value-tolerance", "value")]
+)
+def update_pagination(n, origin_filter, type_filter, page_size, start_date, end_date, min_value, max_value, exact_value, tolerance):
+    if page_size is None:
+        page_size = 25
+        
+    session = Session()
+    try:
+        # Build query with filters
+        query = session.query(Metric)
+        
+        if origin_filter:
+            query = query.filter(Metric.origin == origin_filter)
+        if type_filter:
+            query = query.filter(Metric.metric_type == type_filter)
+            
+        # Apply date range filter if provided
+        if start_date:
+            start_datetime = datetime.strptime(start_date, '%Y-%m-%d')
+            query = query.filter(Metric.timestamp >= start_datetime)
+        if end_date:
+            # Add one day to include the end date fully
+            end_datetime = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+            query = query.filter(Metric.timestamp < end_datetime)
+            
+        # Apply value range filters if provided
+        if min_value is not None:
+            query = query.filter(Metric.value >= min_value)
+        if max_value is not None:
+            query = query.filter(Metric.value <= max_value)
+            
+        # Apply exact value filter with optional tolerance
+        if exact_value is not None:
+            if tolerance is not None and tolerance > 0:
+                # Use between for tolerance range
+                query = query.filter(Metric.value.between(exact_value - tolerance, exact_value + tolerance))
+            else:
+                # Use exact match
+                query = query.filter(Metric.value == exact_value)
+            
+        # Get total count for pagination
+        total_count = query.count()
+        
+        # Calculate max pages
+        max_pages = (total_count + page_size - 1) // page_size
+        
+        # Ensure at least 1 page
+        return max(1, max_pages)
+    finally:
+        session.close()
+
+# Callback to populate origin filter dropdown
+@callback(
+    Output("metrics-origin-filter", "options"),
+    [Input("interval-component", "n_intervals")]
+)
+def update_origin_filter(n):
+    session = Session()
+    try:
+        # Get distinct origins
+        origins = session.query(MetricOrigin.name).distinct().all()
+        
+        # Format for dropdown
+        options = [{"label": origin[0], "value": origin[0]} for origin in origins]
+        return options
+    finally:
+        session.close()
+
+# Callback to populate metric type filter dropdown
+@callback(
+    Output("metrics-type-filter", "options"),
+    [Input("interval-component", "n_intervals"),
+     Input("metrics-origin-filter", "value")]
+)
+def update_metric_type_filter(n, origin_filter):
+    session = Session()
+    try:
+        # Build query
+        query = session.query(MetricType.name).distinct()
+        
+        # Apply origin filter if selected
+        if origin_filter:
+            query = (query.join(Metric).join(MetricOrigin)
+                    .filter(MetricOrigin.name == origin_filter))
+            
+        # Get distinct metric types
+        metric_types = query.all()
+        
+        # Format for dropdown
+        options = [{"label": metric_type[0], "value": metric_type[0]} for metric_type in metric_types]
+        return options
+    except Exception as e:
+        logger.error(f"Error updating metric type filter: {str(e)}")
+        return []
+    finally:
+        session.close()
+
+# Callback to reset filters
+@callback(
+    [Output("metrics-origin-filter", "value"),
+     Output("metrics-type-filter", "value"),
+     Output("metrics-pagination", "active_page"),
+     Output("metrics-date-range", "start_date"),
+     Output("metrics-date-range", "end_date"),
+     Output("metrics-min-value", "value"),
+     Output("metrics-max-value", "value"),
+     Output("metrics-exact-value", "value"),
+     Output("metrics-value-tolerance", "value")],
+    [Input("reset-metrics-filters", "n_clicks")]
+)
+def reset_filters(n_clicks):
+    if n_clicks is None:
+        # Don't trigger on initial load
+        raise dash.exceptions.PreventUpdate
+    
+    # Reset all filters and go back to page 1
+    return None, None, 1, None, None, None, None, None, None
+
+# Callback to reset pagination when Apply Filters is clicked
+@callback(
+    Output("metrics-pagination", "active_page", allow_duplicate=True),
+    [Input("apply-metrics-filters", "n_clicks")],
+    prevent_initial_call=True
+)
+def reset_pagination_on_filter(n_clicks):
+    # Reset to page 1 when filters are applied
+    return 1
 
 # Function to get the Dash server
 def get_dash_app():

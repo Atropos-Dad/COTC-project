@@ -57,6 +57,21 @@ def derive_fen_from_moves(moves, initial_fen=DEFAULT_FEN):
         logger.debug("No moves provided to derive_fen_from_moves, returning initial FEN")
         return initial_fen
     
+    # Check if any of the moves already has a valid FEN position
+    # If so, use the most recent one as the starting point
+    latest_fen = None
+    for i in range(len(moves) - 1, -1, -1):
+        if hasattr(moves[i], 'fen_position') and moves[i].fen_position and is_valid_fen(moves[i].fen_position):
+            latest_fen = moves[i].fen_position
+            # Only process moves after this one
+            moves = moves[i+1:]
+            logger.debug(f"Using FEN from move record as starting point: {latest_fen}")
+            break
+    
+    # If we found a valid FEN in the moves, use it; otherwise use the provided initial_fen
+    if latest_fen:
+        initial_fen = latest_fen
+    
     # Verify the initial FEN is valid before proceeding
     if not is_valid_fen(initial_fen):
         logger.warning(f"Invalid initial FEN provided: '{initial_fen}', using DEFAULT_FEN")
@@ -80,7 +95,18 @@ def derive_fen_from_moves(moves, initial_fen=DEFAULT_FEN):
             clean_move = re.sub(r'[+#!?]', '', move.last_move.strip())
             
             try:
-                # Parse the move string and apply it to the board
+                # Try to parse as UCI move first (e.g., 'f8g8')
+                try:
+                    chess_move = chess.Move.from_uci(clean_move)
+                    if chess_move in board.legal_moves:
+                        board.push(chess_move)
+                        valid_moves += 1
+                        continue
+                except ValueError:
+                    # Not a valid UCI move, try SAN format next
+                    pass
+                
+                # Parse the move string as SAN and apply it to the board
                 chess_move = board.parse_san(clean_move)
                 board.push(chess_move)
                 valid_moves += 1

@@ -4,6 +4,8 @@ import logging
 import socketio  # Changed to python-socketio
 import json
 import time
+import os
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -46,14 +48,28 @@ class AsyncMetricsCollector:
                                        reconnection_delay=reconnect_interval,
                                        logger=True,
                                        engineio_logger=True)
+        
+        # Debug message to show we're creating the instance properly
+        logger.info("Created AsyncMetricsCollector instance with endpoint: %s, namespace: %s", 
+                   self.endpoint_url, self.namespace)
+                   
         self._setup_socketio_handlers()
-        logger.info("Initialized AsyncMetricsCollector with endpoint: %s, queue_size: %d, reconnect_interval: %d", 
-                   endpoint_url, queue_size, reconnect_interval)
+        logger.info("Socket.IO event handlers set up")
+        
+        # Register for dashboard_message events (for debugging)
+        @self.sio.event(namespace=self.namespace)
+        async def dashboard_message(data):
+            logger.info("=== ROOT DASHBOARD MESSAGE HANDLER TRIGGERED ===")
+            logger.info("Received dashboard message (root handler): %s", json.dumps(data))
+            
+            # Use the dedicated save method
+            await self._save_dashboard_message(data)
 
     def _setup_socketio_handlers(self):
-        """Set up Socket.IO event handlers."""
+        """Setup Socket.IO event handlers."""
         @self.sio.event
         async def connect():
+            """Handle connection event."""
             logger.info("Connected to Socket.IO server at %s with namespace %s", self.endpoint_url, self.namespace)
             self.connected = True
             self.reconnect_count = 0  # Reset reconnect counter on successful connection
@@ -62,48 +78,61 @@ class AsyncMetricsCollector:
 
         @self.sio.event
         async def disconnect():
+            """Handle disconnection event."""
             logger.warning("Disconnected from Socket.IO server at %s", self.endpoint_url)
             self.connected = False
 
         @self.sio.event
         def success(data):
+            """Handle success event."""
             logger.info("Server acknowledged data: %s", data)
-
+        
         @self.sio.event
         def error(data):
+            """Handle error event."""
             logger.error("Server reported error: %s", data)
-
+            
         @self.sio.event
         def connect_error(data):
+            """Handle connection error."""
             logger.error("Connection error to Socket.IO server: %s", data)
             self.connected = False
             # Will automatically reconnect based on the client settings
+            
+        @self.sio.event
+        async def dashboard_message(data):
+            """Handle messages from the dashboard."""
+            logger.info("=== DASHBOARD MESSAGE HANDLER TRIGGERED ===")
+            logger.info("Received dashboard message: %s", json.dumps(data))
+            
+            # Use the dedicated save method
+            await self._save_dashboard_message(data)
 
     async def _connect_with_retry(self):
-        """Connect to Socket.IO server with retries."""
-        while self.running:
-            try:
-                if not self.sio.connected:
-                    logger.info("Attempting to connect to Socket.IO server at %s", self.endpoint_url)
-                    await self.sio.connect(self.endpoint_url, namespaces=[self.namespace])
-                    return True
-                else:
-                    return True  # Already connected
-            except socketio.exceptions.ConnectionError as e:
-                self.reconnect_count += 1
-                if self.max_reconnect_attempts > 0 and self.reconnect_count >= self.max_reconnect_attempts:
-                    logger.error("Failed to connect after %d attempts. Giving up.", self.reconnect_count)
-                    return False
+        """Connect to the Socket.IO server with retries."""
+        try:
+            logger.info("Connecting to Socket.IO server at %s with namespace %s", 
+                       self.endpoint_url, self.namespace)
+            
+            # Connect to the server
+            await self.sio.connect(self.endpoint_url, namespaces=[self.namespace], transports=['websocket'])
+            
+            # Explicitly register to listen for dashboard_message events
+            logger.info("Explicitly registering dashboard_message event listener")
+            @self.sio.on('dashboard_message', namespace=self.namespace)
+            async def on_dashboard_message(data):
+                logger.info("=== EXPLICIT DASHBOARD MESSAGE HANDLER TRIGGERED ===")
+                logger.info("Received dashboard message via explicit handler: %s", json.dumps(data))
                 
-                wait_time = self.reconnect_interval
-                logger.warning("Connection attempt %d failed: %s. Retrying in %d seconds...", 
-                              self.reconnect_count, str(e), wait_time)
-                await asyncio.sleep(wait_time)
-            except Exception as e:
-                logger.exception("Unexpected error while connecting to Socket.IO server: %s", str(e))
-                await asyncio.sleep(self.reconnect_interval)
-        
-        return False  # Not running anymore
+                # Use the dedicated save method
+                await self._save_dashboard_message(data)
+            
+            logger.info("Connected successfully")
+            return True
+            
+        except Exception as e:
+            logger.error("Failed to connect to Socket.IO server: %s", str(e))
+            return False
     
     async def _monitor_connection(self):
         """Monitor the connection and attempt to reconnect when disconnected."""
@@ -251,6 +280,36 @@ class AsyncMetricsCollector:
                 
         logger.info("Metrics sending complete. Sent: %d, Errors: %d", 
                    metrics_sent, errors)
+
+    async def _save_dashboard_message(self, data):
+        """Save a dashboard message to the logbook file.
+        
+        Args:
+            data: The message data received from the dashboard
+        """
+        logger.info("Saving dashboard message: %s", json.dumps(data))
+        
+        try:
+            # Create logbook directory in the current working directory
+            logbook_dir = "logbook"
+            os.makedirs(logbook_dir, exist_ok=True)
+            
+            # Write to logbook file in current working directory
+            logbook_file = os.path.join(logbook_dir, "dashboard_messages.log")
+            
+            with open(logbook_file, "a") as f:
+                timestamp = data.get("timestamp", datetime.now().isoformat())
+                message = data.get("message", "No message content")
+                user_ip = data.get("user_ip", "unknown")
+                log_entry = f"[{timestamp}] [{user_ip}] {message}\n"
+                f.write(log_entry)
+            
+            logger.info(f"Successfully saved dashboard message to logbook: {os.path.abspath(logbook_file)}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save dashboard message: {str(e)}")
+            logger.exception("Detailed error:")
+            return False
 
 async def collect_and_send_metrics(endpoint_url: str, 
                                  metrics_collector: Any):

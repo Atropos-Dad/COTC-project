@@ -16,3 +16,6 @@ wheels/
 .env
 
 data_*.json
+.aider*
+
+logs/

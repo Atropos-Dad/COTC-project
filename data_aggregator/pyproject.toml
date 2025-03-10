@@ -19,6 +19,7 @@ dependencies = [
     "numpy>=2.2.3",
     "pandas>=2.2.3",
     "chess>=1.11.2",
+    "colorlog>=6.9.0",
 ]
 
 [tool.poetry.dependencies]

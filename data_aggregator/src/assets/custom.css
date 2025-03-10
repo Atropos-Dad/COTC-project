@@ -1,0 +1,13 @@
+
+.debug-box {
+    border: 1px solid #ccc;
+    padding: 10px;
+    margin-bottom: 20px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+}
+.debug-title {
+    font-weight: bold;
+    margin-bottom: 8px;
+    color: #0d6efd;
+}

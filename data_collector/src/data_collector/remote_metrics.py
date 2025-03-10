@@ -3,22 +3,33 @@ import logging
 import berserk
 import os
 import asyncio
+import socket
 from dotenv import load_dotenv
 from datetime import datetime
-from typing import Optional, AsyncGenerator, Dict, Any
-from data_collector.models import Player, ChessGameMetrics
+from typing import Optional, AsyncGenerator, Dict, Any, List, Tuple, Literal
+from data_collector.models import Player, ChessGameMetrics, MetricsGenerator, GenericMetric
 
 # Load environment variables from .env file
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-class LichessMetricsCollector:
-    def __init__(self):
+class LichessMetricsCollector(MetricsGenerator):
+    def __init__(self, mode: Literal["game", "system", "both"] = "both"):
+        """Initialize the Lichess metrics collector.
+        
+        Args:
+            mode: The mode of operation:
+                - "game": Only yield chess game metrics
+                - "system": Only yield system metrics (piece counts)
+                - "both": Yield both types of metrics (default)
+        """
         self._current_game_id = None
         self._white_player = None
         self._black_player = None
-        logger.info("Initialized LichessMetricsCollector")
+        self._hostname = socket.gethostname()
+        self._mode = mode
+        logger.info(f"Initialized LichessMetricsCollector in {mode} mode")
         
     async def generate_metrics(self) -> AsyncGenerator[dict, None]:
         """Generate metrics from Lichess TV stream.
@@ -46,22 +57,56 @@ class LichessMetricsCollector:
                     # Handle end of previous game
                     if self._current_game_id and self._white_player and self._black_player:
                         logger.info("Game ended: %s", self._current_game_id)
-                        metrics = await self._end_game(timestamp)
-                        yield metrics
+                        if self._mode in ["game", "both"]:
+                            metrics = await self._end_game(timestamp)
+                            yield metrics
                         games_processed += 1
                     
                     # Setup new game
                     logger.info("New game starting")
-                    metrics = await self._new_game(data, timestamp)
-                    yield metrics
+                    if self._mode in ["game", "both"]:
+                        metrics = await self._new_game(data, timestamp)
+                        yield metrics
+                    else:
+                        # Even in system-only mode, we need to set up the game state
+                        await self._setup_game_state(data)
+                    
+                    # Get piece counts from FEN and send as system metrics
+                    fen = data.get('fen')
+                    if fen and self._mode in ["system", "both"]:
+                        white_pieces, black_pieces = fen_to_piece_count(fen)
+                        # Yield white piece count metric
+                        white_metric = self._create_piece_count_metric("white_pieces", white_pieces, timestamp)
+                        yield white_metric.to_timeseries_format()
+                        
+                        # Yield black piece count metric
+                        black_metric = self._create_piece_count_metric("black_pieces", black_pieces, timestamp)
+                        yield black_metric.to_timeseries_format()
                     
                 elif position['t'] == 'fen':
                     if not all([self._current_game_id, self._white_player, self._black_player]):
                         logger.warning("Received position update without active game")
                         continue
                     
-                    metrics = await self._continued_game(data, timestamp)
-                    yield metrics
+                    if self._mode in ["game", "both"]:
+                        metrics = await self._continued_game(data, timestamp)
+                        yield metrics
+                    else:
+                        # Update player times even in system-only mode
+                        self._update_player_times(data)
+                    
+                    # Get piece counts from FEN and send as system metrics
+                    fen = data.get('fen')
+                    if fen and self._mode in ["system", "both"]:
+                        white_pieces, black_pieces = fen_to_piece_count(fen)
+                        # Yield white piece count metric
+                        white_metric = self._create_piece_count_metric("white_pieces", white_pieces, timestamp)
+                        yield white_metric.to_timeseries_format()
+                        
+                        # Yield black piece count metric
+                        black_metric = self._create_piece_count_metric("black_pieces", black_pieces, timestamp)
+                        yield black_metric.to_timeseries_format()
+                    
                     positions_processed += 1
                     
                     if positions_processed % 100 == 0:
@@ -78,21 +123,31 @@ class LichessMetricsCollector:
             logger.info("Metrics generation complete. Games: %d, Positions: %d", 
                        games_processed, positions_processed)
 
-    async def _end_game(self, timestamp: datetime) -> Dict[str, Any]:
-        """Handle an end game"""
-        logger.debug("Processing end game: %s", self._current_game_id)
-        metrics = ChessGameMetrics(
+    def _create_piece_count_metric(self, metric_type: str, count: int, timestamp: datetime) -> GenericMetric:
+        """Create a GenericMetric for piece count.
+        
+        Args:
+            metric_type: Type of metric (white_pieces or black_pieces)
+            count: Number of pieces
+            timestamp: Time when the metric was collected
+            
+        Returns:
+            GenericMetric: Metric object for the piece count
+        """
+        return GenericMetric(
+            origin="lichess",
+            metric_type=metric_type,
+            value=float(count),
             timestamp=timestamp,
-            game_id=self._current_game_id,
-            white_player=self._white_player,
-            black_player=self._black_player,
-            game_ended=True,
-            end_reason="game_complete"
+            metadata={"game_id": self._current_game_id}
         )
-        return metrics.to_timeseries_data()
 
-    async def _new_game(self, data: Dict[str, Any], timestamp: datetime) -> Dict[str, Any]:
-        """Handle a new game"""
+    async def _setup_game_state(self, data: Dict[str, Any]) -> None:
+        """Set up the game state without creating metrics.
+        
+        Args:
+            data: Game data from Lichess
+        """
         white_data = data['players'][0]
         black_data = data['players'][1]
         
@@ -112,16 +167,42 @@ class LichessMetricsCollector:
         
         self._current_game_id = data['id']
         
+        logger.info("Game state set up: %s, White: %s (%d) vs Black: %s (%d)", 
+                   self._current_game_id,
+                   self._white_player.name, self._white_player.rating,
+                   self._black_player.name, self._black_player.rating)
+
+    def _update_player_times(self, data: Dict[str, Any]) -> None:
+        """Update player times without creating metrics.
+        
+        Args:
+            data: Game data from Lichess
+        """
+        self._white_player.remaining_time = data.get('wc')
+        self._black_player.remaining_time = data.get('bc')
+
+    async def _end_game(self, timestamp: datetime) -> Dict[str, Any]:
+        """Handle an end game"""
+        logger.debug("Processing end game: %s", self._current_game_id)
+        metrics = ChessGameMetrics(
+            timestamp=timestamp,
+            game_id=self._current_game_id,
+            white_player=self._white_player,
+            black_player=self._black_player,
+            game_ended=True,
+            end_reason="game_complete"
+        )
+        return metrics.to_timeseries_data()
+
+    async def _new_game(self, data: Dict[str, Any], timestamp: datetime) -> Dict[str, Any]:
+        """Handle a new game"""
+        # Set up game state
+        await self._setup_game_state(data)
+        
         fen = data.get('fen')
         
         # Get piece counts from FEN
         white_pieces, black_pieces = fen_to_piece_count(fen) if fen else (0, 0)
-
-        logger.info("New game started: %s, White: %s (%d) vs Black: %s (%d)", 
-                   self._current_game_id,
-                   self._white_player.name, self._white_player.rating,
-                   self._black_player.name, self._black_player.rating)
-        
         
         metrics = ChessGameMetrics(
             timestamp=timestamp,
@@ -132,14 +213,13 @@ class LichessMetricsCollector:
             fen_position=fen,
             white_piece_count=white_pieces,
             black_piece_count=black_pieces
-
         )
         return metrics.to_timeseries_data()
         
     async def _continued_game(self, data: Dict[str, Any], timestamp: datetime) -> Dict[str, Any]:
         """Handle a continued game"""
-        self._white_player.remaining_time = data.get('wc')
-        self._black_player.remaining_time = data.get('bc')
+        # Update player times
+        self._update_player_times(data)
         
         # Get piece counts from FEN
         fen = data.get('fen')

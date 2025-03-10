@@ -8,6 +8,8 @@ from datetime import datetime
 import os
 import logging
 import sys
+import threading
+import time
 
 # Import database functions
 from database import init_db, save_chess_data, save_metric_data
@@ -60,70 +62,26 @@ def home():
 def dashboard():
     return render_template('dashboard.html')
 
-# Keep the HTTP endpoint for backward compatibility
-@app.route('/api/data', methods=['POST'])
-def receive_data():
-    try:
-        data = request.get_json()
+# Route to handle dashboard messages
+@app.route('/api/send_message', methods=['POST'])
+def send_dashboard_message():
+    """API endpoint to send messages from dashboard to clients."""
+    data = request.json
+    if data and 'message' in data:
+        # Get the IP address of the user
+        user_ip = request.remote_addr
         
-        if not data:
-            logger.warning("Received empty data in HTTP endpoint")
-            return jsonify({'error': 'No data provided'}), 400
-        
-        # Enhanced logging for HTTP data reception
-        current_time = datetime.now().isoformat()
-        data_size = len(json.dumps(data))
-        client_ip = request.remote_addr
-        
-        logger.info(f"[HTTP_DATA_RECEIVED] Time: {current_time} | Client IP: {client_ip} | Size: {data_size} bytes")
-        
-        # Log data type and measurement if available
-        measurement = data.get('measurement', 'unknown')
-        tags = data.get('tags', {})
-        game_id = tags.get('game_id', 'unknown')
-        event_type = tags.get('event_type', 'unknown')
-        
-        logger.info(f"[HTTP_DATA_DETAILS] Measurement: {measurement} | Game ID: {game_id} | Event: {event_type}")
-        
-        result = save_chess_data(data)
-        
-        if 'error' in result:
-            return jsonify(result), 500
-            
-        return jsonify(result), 201
-        
-    except Exception as e:
-        logger.error(f"Error in HTTP endpoint: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-# API endpoint for generic metrics
-@app.route('/api/metrics', methods=['POST'])
-def receive_metrics():
-    try:
-        data = request.get_json()
-        
-        if not data:
-            logger.warning("Received empty data in metrics endpoint")
-            return jsonify({'error': 'No data provided'}), 400
-        
-        # Enhanced logging for metrics reception
-        current_time = datetime.now().isoformat()
-        data_size = len(json.dumps(data))
-        client_ip = request.remote_addr
-        
-        logger.info(f"[METRICS_DATA_RECEIVED] Time: {current_time} | Client IP: {client_ip} | Size: {data_size} bytes")
-        logger.debug(f"[METRICS_DATA_CONTENT] {json.dumps(data)}")
-        
-        result = save_metric_data(data)
-        
-        if 'error' in result:
-            return jsonify(result), 500
-            
-        return jsonify(result), 201
-        
-    except Exception as e:
-        logger.error(f"Error in metrics endpoint: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        payload = {
+            'message': data['message'],
+            'timestamp': datetime.now().isoformat(),
+            'type': 'dashboard_message',
+            'user_ip': user_ip  # Include the IP address in the payload
+        }
+        # Broadcast to all connected clients
+        socketio.emit('dashboard_message', payload, namespace='/ws/metrics')
+        return jsonify({'status': 'success', 'message': 'Message sent to clients'})
+    else:
+        return jsonify({'status': 'error', 'message': 'Invalid message data'}), 400
 
 # WebSocket endpoint for metrics
 @socketio.on('connect', namespace='/ws/metrics')
@@ -164,7 +122,7 @@ def handle_game_metrics_disconnect():
     
     logger.info(f"[SOCKET_GAME_METRICS_DISCONNECT] Time: {disconnect_time} | Client ID: {client_id}")
 
-@socketio.on('metric', namespace='/ws/metrics')
+@socketio.on('metric', namespace='/ws/metrics') # save metric data
 def handle_system_metrics(data):
     """Handle incoming system metric data through WebSocket."""
     try:
@@ -190,7 +148,7 @@ def handle_system_metrics(data):
         logger.exception(f"Exception in handle_system_metrics: {error_msg}")
         emit('error', {'error': error_msg})
 
-@socketio.on('metric', namespace='/ws/game_metrics')
+@socketio.on('metric', namespace='/ws/game_metrics') # save game metric data
 def handle_game_metrics(data):
     """Handle incoming chess game metric data through WebSocket."""
     try:
@@ -219,63 +177,6 @@ def handle_game_metrics(data):
     except Exception as e:
         error_msg = str(e)
         logger.exception(f"Exception in handle_game_metrics: {error_msg}")
-        emit('error', {'error': error_msg})
-
-# WebSocket endpoint for data
-@socketio.on('connect', namespace='/ws/data')
-def handle_connect():
-    """Handle client connection."""
-    client_id = request.sid
-    client_ip = request.remote_addr
-    connection_time = datetime.now().isoformat()
-    
-    logger.info(f"[SOCKET_CONNECT] Time: {connection_time} | Client ID: {client_id} | IP: {client_ip}")
-    logger.debug(f"[SOCKET_CONNECT_DETAILS] Headers: {dict(request.headers)}")
-    
-    emit('response', {'data': 'Connected', 'sid': client_id})
-
-@socketio.on('disconnect', namespace='/ws/data')
-def handle_disconnect():
-    """Handle client disconnection."""
-    client_id = request.sid
-    disconnect_time = datetime.now().isoformat()
-    
-    logger.info(f"[SOCKET_DISCONNECT] Time: {disconnect_time} | Client ID: {client_id}")
-
-@socketio.on('data', namespace='/ws/data')
-def handle_data(data):
-    """Handle incoming data through WebSocket."""
-    try:
-        # Enhanced logging for socket data reception
-        current_time = datetime.now().isoformat()
-        data_size = len(json.dumps(data))
-        client_id = request.sid
-        
-        logger.info(f"[SOCKET_DATA_RECEIVED] Time: {current_time} | Client: {client_id} | Size: {data_size} bytes")
-        
-        # Log data type and measurement if available
-        measurement = data.get('measurement', 'unknown')
-        tags = data.get('tags', {})
-        game_id = tags.get('game_id', 'unknown')
-        event_type = tags.get('event_type', 'unknown')
-        
-        logger.info(f"[SOCKET_DATA_DETAILS] Measurement: {measurement} | Game ID: {game_id} | Event: {event_type}")
-        
-        # Original debug log with full data content
-        logger.debug(f"Data content: {json.dumps(data, indent=2)}")
-        
-        result = save_chess_data(data)
-        
-        if 'error' in result:
-            logger.error(f"Error processing data from {request.sid}: {result['error']}")
-            emit('error', result)
-        else:
-            logger.info(f"Successfully processed data from {request.sid}")
-            emit('success', result)
-            
-    except Exception as e:
-        error_msg = str(e)
-        logger.exception(f"Exception in handle_data: {error_msg}")
         emit('error', {'error': error_msg})
 
 if __name__ == '__main__':

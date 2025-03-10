@@ -97,13 +97,7 @@ class Config:
         """
         # Create logs directory if needed and file output is enabled
         if self.logging_config.file_output.enabled:
-            # Get the project root directory (two levels up from this file)
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            # Make log_dir absolute by joining it with project_root
-            log_dir = os.path.join(project_root, self.logging_config.file_output.log_dir)
-            # Update the log_dir in the config
-            self.logging_config.file_output.log_dir = log_dir
-            os.makedirs(log_dir, exist_ok=True)
+            os.makedirs(self.logging_config.file_output.log_dir, exist_ok=True)
                 
         # Get root logger
         logger = logging.getLogger()
@@ -118,8 +112,12 @@ class Config:
         if enabled_levels:
             root_level = min(enabled_levels)        
         logger.setLevel(root_level)
-
-        # Clear any existing handlers
+        
+        # Check if this is a Flask reloader process
+        is_reloader_process = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+        
+        # FIXED: Always clear existing handlers to ensure proper configuration
+        # This prevents the issue where logging stops working after Flask reloads
         logger.handlers.clear()
         
         # Add console handler if enabled
@@ -159,32 +157,6 @@ class Config:
         
         return logger
         
-    def get(self, path: str, default: Any = None) -> Any:
-        """
-        Access configuration values using dot notation path.
-        
-        Args:
-            path: Dot-separated path to the configuration value (e.g., 'metrics.interval_seconds')
-            default: Default value to return if the path doesn't exist
-            
-        Returns:
-            The configuration value at the specified path, or the default value if not found
-        """
-        # Split the path into parts
-        parts = path.split('.')
-        
-        # Start with the full config
-        current = self._config
-        
-        # Traverse the path
-        for part in parts:
-            if isinstance(current, dict) and part in current:
-                current = current[part]
-            else:
-                return default
-        
-        return current
-    
     def get_logger(self, name: str) -> logging.Logger:
         """
         Get a logger for a specific module with the configured settings.

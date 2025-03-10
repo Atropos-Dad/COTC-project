@@ -2,7 +2,14 @@
 import psutil
 import platform
 import json
-from typing import Dict, Any
+import socket
+import logging
+from datetime import datetime
+from typing import Dict, Any, List, AsyncGenerator
+
+from data_collector.models import SystemMetrics, GenericMetric, MetricsGenerator
+
+logger = logging.getLogger(__name__)
 
 def collect_system_metrics(cpu_measure_interval: int = 0.2) -> Dict[str, Any]:
     """Collect current system metrics."""
@@ -62,19 +69,13 @@ def collect_system_metrics(cpu_measure_interval: int = 0.2) -> Dict[str, Any]:
     memory_available = memory.available
     memory_percent = memory.percent
 
-    # Get disk usage for all mounted partitions
-    disk_usage = {}
-    for partition in psutil.disk_partitions():
-        try:
-            usage = psutil.disk_usage(partition.mountpoint)
-            disk_usage[partition.mountpoint] = {
-                'total': usage.total,
-                'used': usage.used,
-                'free': usage.free,
-                'percent': usage.percent
-            }
-        except PermissionError:
-            continue
+    # Get network information
+    network = psutil.net_io_counters()
+    network_bytes_sent = network.bytes_sent
+    network_bytes_recv = network.bytes_recv
+
+    # Get process count
+    process_count = len(psutil.pids())
 
     # Get platform information
     platform_info = f"{platform.system()} {platform.release()}"
@@ -93,9 +94,92 @@ def collect_system_metrics(cpu_measure_interval: int = 0.2) -> Dict[str, Any]:
         'memory_total': memory_total,
         'memory_available': memory_available,
         'memory_percent': memory_percent,
-        'disk_usage': disk_usage,
+        'network_bytes_sent': network_bytes_sent,
+        'network_bytes_recv': network_bytes_recv,
+        'process_count': process_count,
         'platform_info': platform_info,
         'python_version': python_version
     }
     
     return result
+
+
+def convert_to_generic_metrics(system_metrics: Dict[str, Any]) -> List[GenericMetric]:
+    """
+    Convert system metrics to GenericMetric objects.
+    
+    Args:
+        system_metrics: Dictionary of system metrics as returned by collect_system_metrics()
+        
+    Returns:
+        List of GenericMetric objects
+    """
+    result = []
+    timestamp = datetime.now()
+    hostname = socket.gethostname()
+    
+    # Process numeric metrics
+    for key, value in system_metrics.items():
+        # Skip non-numeric values and complex structures
+        if not isinstance(value, (int, float)) or value is None:
+            continue
+            
+        metric = GenericMetric(
+            origin=hostname,
+            metric_type=key,
+            value=float(value),
+            timestamp=timestamp,
+            metadata={'system_info': system_metrics.get('platform_info')}
+        )
+        result.append(metric)
+    
+    return result
+
+
+class SystemMetricsGenerator(MetricsGenerator):
+    """Generates system metrics for AsyncMetricsCollector."""
+    
+    def __init__(self, interval_seconds: float = 10.0, cpu_measure_interval: float = 0.2):
+        """Initialize system metrics generator.
+        
+        Args:
+            interval_seconds: Interval between metric collections in seconds
+            cpu_measure_interval: Interval for CPU percentage measurement
+        """
+        self.interval_seconds = interval_seconds
+        self.cpu_measure_interval = cpu_measure_interval
+        self.running = True
+        logger.info("Initialized SystemMetricsGenerator with interval: %.1f sec", interval_seconds)
+    
+    async def generate_metrics(self) -> AsyncGenerator[Dict[str, Any], None]:
+        """Generate system metrics at regular intervals.
+        
+        Yields:
+            Dict: Metric data in time series format
+        """
+        try:
+            while self.running:
+                # Collect system metrics
+                system_metrics_dict = collect_system_metrics(cpu_measure_interval=self.cpu_measure_interval)
+                
+                # Convert to generic metrics format
+                metrics = convert_to_generic_metrics(system_metrics_dict)
+                
+                # Yield each metric as a timeseries data point
+                for metric in metrics:
+                    yield metric.to_timeseries_format()
+                
+                # Wait for the next interval
+                import asyncio
+                await asyncio.sleep(self.interval_seconds)
+        
+        except Exception as e:
+            logger.exception("Error in system metrics generation")
+            raise
+        finally:
+            logger.info("System metrics generation stopped")
+    
+    def stop(self):
+        """Stop metrics generation."""
+        logger.info("Stopping system metrics generator")
+        self.running = False

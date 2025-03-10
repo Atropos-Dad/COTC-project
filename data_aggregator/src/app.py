@@ -3,6 +3,7 @@ eventlet.monkey_patch()  # Required for proper async operation
 
 from flask import Flask, request, jsonify, render_template
 from flask_socketio import SocketIO, emit
+from flask_caching import Cache
 import json
 from datetime import datetime
 import os
@@ -31,15 +32,27 @@ logger = config.get_logger(__name__)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'  # Required for SocketIO
+
+# Create a data directory if it doesn't exist
+DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Create cache directory
+CACHE_DIR = os.path.join(DATA_DIR, 'cache')
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+# Initialize caching
+cache = Cache(app, config={
+    'CACHE_TYPE': 'filesystem',
+    'CACHE_DIR': CACHE_DIR,
+    'CACHE_DEFAULT_TIMEOUT': 60  # seconds
+})
+
 socketio = SocketIO(app, 
                    cors_allowed_origins="*", # Allow all origins for testing
                    async_mode='eventlet',    # Use eventlet for better performance
                    logger=True,              # Enable SocketIO's own logging
                    engineio_logger=True)     # Enable Engine.IO logging
-
-# Create a data directory if it doesn't exist
-DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
-os.makedirs(DATA_DIR, exist_ok=True)
 
 # Create a templates directory if it doesn't exist
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates')
@@ -49,7 +62,7 @@ os.makedirs(TEMPLATES_DIR, exist_ok=True)
 init_db()
 
 # Initialize the Dash app
-dash_app = get_dash_app()
+dash_app = get_dash_app(cache)
 dash_app.init_app(app)
 
 # Home route

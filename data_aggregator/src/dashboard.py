@@ -14,6 +14,7 @@ import re
 import logging
 import json
 import requests
+import functools
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -21,6 +22,48 @@ logger = logging.getLogger(__name__)
 from models import Game, Move, RawData, Metric, MetricType, MetricOrigin, TimeZoneSource, Player
 from database import Session
 from chess_utils import is_valid_fen, derive_fen_from_moves, DEFAULT_FEN
+
+# Global cache reference
+_cache = None
+
+# Cache utility functions
+def init_cache(cache_instance):
+    """Initialize the global cache reference."""
+    global _cache
+    _cache = cache_instance
+    logger.info("Cache initialized in dashboard module")
+
+def cached_query(timeout=60):
+    """
+    Decorator to cache a function that returns query results.
+    
+    Args:
+        timeout: Cache timeout in seconds (default: 60)
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            if _cache is None:
+                # No cache available, execute the function directly
+                logger.debug(f"No cache available for {func.__name__}, executing directly")
+                return func(*args, **kwargs)
+            
+            # Create a cache key based on function name and arguments
+            key = f"{func.__name__}:{str(args)}:{str(sorted(kwargs.items()))}"
+            
+            # Try to get from cache first
+            result = _cache.get(key)
+            if result is not None:
+                logger.debug(f"Cache hit for {func.__name__}")
+                return result
+            
+            # If not in cache, execute the function and cache the result
+            logger.debug(f"Cache miss for {func.__name__}, executing query")
+            result = func(*args, **kwargs)
+            _cache.set(key, result, timeout=timeout)
+            return result
+        return wrapper
+    return decorator
 
 # Initialize the Dash app with Bootstrap theme
 dash_app = dash.Dash(
@@ -444,21 +487,8 @@ dash_app.layout = dbc.Container([
     [Input("interval-component", "n_intervals")]
 )
 def update_games_count(n):
-    session = Session()
-    try:
-        total_games = session.query(func.count(Game.id)).scalar()
-        
-        # Get games with moves in the last 5 minutes
-        five_min_ago = datetime.now() - timedelta(minutes=5)
-        active_games = session.query(func.count(func.distinct(Move.game_id))) \
-            .filter(Move.timestamp > five_min_ago).scalar()
-        
-        return f"{total_games}", f"{active_games} active in last 5 min"
-    except Exception as e:
-        logger.error(f"Error updating games count: {str(e)}")
-        return "Error", "Error"
-    finally:
-        session.close()
+    total_games, active_games_count = get_games_count()
+    return f"{total_games:,}", f"{active_games_count:,}"
 
 # Callback for updating data ingestion rate
 @callback(
@@ -466,15 +496,8 @@ def update_games_count(n):
     [Input("interval-component", "n_intervals")]
 )
 def update_data_rate(n):
-    session = Session()
-    try:
-        one_min_ago = datetime.now() - timedelta(minutes=1)
-        events_last_minute = session.query(func.count(RawData.id)) \
-            .filter(RawData.received_timestamp > one_min_ago).scalar()
-        
-        return f"{events_last_minute}"
-    finally:
-        session.close()
+    events_last_minute = get_events_last_minute()
+    return f"{events_last_minute}"
 
 # Callback for updating latest event
 @callback(
@@ -482,74 +505,45 @@ def update_data_rate(n):
     [Input("interval-component", "n_intervals")]
 )
 def update_latest_event(n):
-    session = Session()
-    try:
-        latest_event = session.query(RawData) \
-            .order_by(desc(RawData.received_timestamp)).first()
+    latest_event = get_latest_event()
+    
+    if latest_event:
+        measurement = latest_event.measurement or "unknown"
+        event_display = ""
         
-        if latest_event:
-            measurement = latest_event.measurement or "unknown"
-            event_display = ""
-            
-            # Process based on measurement type
-            if measurement == "chess_game" and latest_event.data and isinstance(latest_event.data, dict):
-                # Chess game events
-                tags = latest_event.data.get('tags', {})
-                if isinstance(tags, dict):
-                    game_id = tags.get('game_id', 'unknown')
-                    event_type = tags.get('event_type', 'unknown')
-                    event_display = f"{measurement} - {event_type} - Game: {game_id}"
-                else:
-                    event_display = f"{measurement} - incomplete data"
-            
-            elif measurement.startswith("metric_") and latest_event.data and isinstance(latest_event.data, dict):
-                # System metrics
-                fields = latest_event.data.get('fields', {})
-                if isinstance(fields, dict):
-                    metric_name = measurement.replace("metric_", "")
-                    metric_value = fields.get('value', 'unknown')
-                    event_display = f"Metric: {metric_name} - Value: {metric_value}"
-                else:
-                    event_display = f"{measurement} - incomplete data"
-            
+        # Process based on measurement type
+        if measurement == "chess_game" and latest_event.data and isinstance(latest_event.data, dict):
+            # Chess game events
+            tags = latest_event.data.get('tags', {})
+            if isinstance(tags, dict):
+                game_id = tags.get('game_id', 'unknown')
+                event_type = tags.get('event_type', 'unknown')
+                event_display = f"{measurement} - {event_type} - Game: {game_id}"
             else:
-                # Other event types - extract what we can
-                if latest_event.data and isinstance(latest_event.data, dict):
-                    # Try to find meaningful data to display
-                    tags = latest_event.data.get('tags', {})
-                    fields = latest_event.data.get('fields', {})
-                    
-                    if isinstance(tags, dict) and tags:
-                        # If tags exist, show the first few key/values
-                        tag_items = list(tags.items())[:2]  # Show up to 2 tags
-                        tag_str = ", ".join([f"{k}: {v}" for k, v in tag_items])
-                        event_display = f"{measurement} - {tag_str}"
-                    elif isinstance(fields, dict) and fields:
-                        # If fields exist, show the first few
-                        field_items = list(fields.items())[:2]  # Show up to 2 fields
-                        field_str = ", ".join([f"{k}: {v}" for k, v in field_items])
-                        event_display = f"{measurement} - {field_str}"
-                    else:
-                        # Fall back to showing that data exists but in unknown format
-                        event_display = f"{measurement} - unstructured data"
-                else:
-                    event_display = f"{measurement} - no data"
-            
-            # Add timestamp information
-            time_diff = datetime.now() - latest_event.received_timestamp
-            seconds_ago = int(time_diff.total_seconds())
-            
-            if seconds_ago < 60:
-                time_str = f"{seconds_ago} seconds ago"
+                event_display = f"{measurement} - incomplete data"
+        
+        elif measurement.startswith("metric_") and latest_event.data and isinstance(latest_event.data, dict):
+            # System metrics
+            tags = latest_event.data.get('tags', {})
+            fields = latest_event.data.get('fields', {})
+            if isinstance(tags, dict) and isinstance(fields, dict):
+                origin = tags.get('origin', 'unknown')
+                field_names = list(fields.keys())
+                field_names_display = ", ".join(field_names[:3])
+                if len(field_names) > 3:
+                    field_names_display += f" (and {len(field_names) - 3} more)"
+                event_display = f"{measurement} - {origin} - Fields: {field_names_display}"
             else:
-                minutes_ago = seconds_ago // 60
-                time_str = f"{minutes_ago} minutes ago"
-            
-            return f"{event_display} ({time_str})"
+                event_display = f"{measurement} - incomplete data"
+                
         else:
-            return "No events recorded yet"
-    finally:
-        session.close()
+            # Other types
+            event_display = f"{measurement} - Generic Event"
+            
+        event_time = latest_event.received_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        return f"{event_time} - {event_display}"
+    
+    return "No events recorded yet"
 
 # Callback for updating ingestion graph
 @callback(
@@ -676,27 +670,24 @@ def update_events_distribution(n):
     [Input("interval-component", "n_intervals")]
 )
 def update_recent_games(n):
+    recent_games = get_recent_games(limit=5)
+    
+    if not recent_games:
+        return html.Div("No games recorded yet", className="text-center text-muted")
+    
+    # Create table
+    table_header = [
+        html.Thead(html.Tr([
+            html.Th("Game ID"),
+            html.Th("White"),
+            html.Th("Black"),
+            html.Th("Started"),
+            html.Th("Moves")
+        ]))
+    ]
+    
     session = Session()
     try:
-        # Get 5 most recent games with player names
-        recent_games = session.query(Game) \
-            .order_by(desc(Game.start_time)) \
-            .limit(5).all()
-        
-        if not recent_games:
-            return html.Div("No games recorded yet", className="text-center text-muted")
-        
-        # Create table
-        table_header = [
-            html.Thead(html.Tr([
-                html.Th("Game ID"),
-                html.Th("White"),
-                html.Th("Black"),
-                html.Th("Started"),
-                html.Th("Moves")
-            ]))
-        ]
-        
         rows = []
         for game in recent_games:
             # Count moves for this game
@@ -723,19 +714,19 @@ def update_recent_games(n):
                 html.Td(time_str),
                 html.Td(move_count)
             ]))
-        
-        table_body = [html.Tbody(rows)]
-        
-        return dbc.Table(
-            table_header + table_body,
-            bordered=True,
-            hover=True,
-            responsive=True,
-            striped=True,
-            size="sm"
-        )
     finally:
         session.close()
+    
+    table_body = [html.Tbody(rows)]
+    
+    return dbc.Table(
+        table_header + table_body,
+        bordered=True,
+        hover=True,
+        responsive=True,
+        striped=True,
+        size="sm"
+    )
 
 # Callback for game selector dropdown
 @callback(
@@ -743,29 +734,15 @@ def update_recent_games(n):
     [Input("interval-component", "n_intervals")]
 )
 def update_game_selector(n):
+    active_games = get_active_games()
+    
+    if not active_games:
+        return []
+    
+    # Format options for dropdown
+    options = []
     session = Session()
     try:
-        # Get active games (with moves in the last 10 minutes)
-        ten_min_ago = datetime.now() - timedelta(minutes=10)
-        
-        # Get game_id and player info for games with recent moves
-        # Include the most recent move timestamp for sorting
-        active_games = session.query(
-            Game.game_id,
-            Game.white_player_id,
-            Game.black_player_id,
-            func.max(Move.timestamp).label('last_move_time')  # Get the most recent move timestamp
-        ).join(Move, Game.game_id == Move.game_id) \
-         .filter(Move.timestamp > ten_min_ago) \
-         .group_by(Game.game_id, Game.white_player_id, Game.black_player_id) \
-         .order_by(desc('last_move_time')) \
-         .all()
-        
-        if not active_games:
-            return []
-        
-        # Format options for dropdown
-        options = []
         for game_id, white_player_id, black_player_id, last_move_time in active_games:
             # Get player names from the database
             white_player = session.query(Player).filter(Player.id == white_player_id).first() if white_player_id else None
@@ -785,10 +762,10 @@ def update_game_selector(n):
                 "label": f"{white_name} vs {black_name} ({game_id}) - {time_str}",
                 "value": game_id
             })
-        
-        return options
     finally:
         session.close()
+    
+    return options
 
 # Modified clientside callback to properly handle FEN data
 clientside_callback(
@@ -863,107 +840,95 @@ def update_chess_board(selected_game_id, n):
         debug_info.append(f"No game selected, using DEFAULT_FEN")
         return DEFAULT_FEN, [], "White: Select a game", "Black: Select a game", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
     
-    session = Session()
-    try:
-        # Get game info
-        game = session.query(Game).filter(Game.game_id == selected_game_id).first()
+    # Get game data using cached function
+    game, moves = get_game_data(selected_game_id)
+    
+    if not game:
+        logger.debug(f"Game {selected_game_id} not found, using DEFAULT_FEN")
+        debug_info.append(f"Game {selected_game_id} not found, using DEFAULT_FEN")
+        return DEFAULT_FEN, [], "White: Select a game", "Black: Select a game", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
+    
+    debug_info.append(f"Found {len(moves)} moves for game {selected_game_id}")
+    
+    if not moves:
+        logger.debug(f"No moves found for game {selected_game_id}, using DEFAULT_FEN")
+        debug_info.append(f"No moves found, using DEFAULT_FEN")
+        return DEFAULT_FEN, [], f"White: {game.white_player.name if game.white_player else 'Unknown'}", f"Black: {game.black_player.name if game.black_player else 'Unknown'}", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
+    
+    # Get the latest FEN position or derive it from moves
+    latest_move = moves[-1]
+    debug_info.append(f"Latest move: {latest_move.last_move}")
+    
+    # Check if the latest move has a valid FEN position
+    if latest_move.fen_position and is_valid_fen(latest_move.fen_position):
+        current_fen = latest_move.fen_position
+        logger.debug(f"Using stored FEN for game {selected_game_id}: {current_fen}")
+        debug_info.append(f"Using stored FEN: {current_fen}")
+    else:
+        logger.debug(f"Deriving FEN for game {selected_game_id} from {len(moves)} moves")
+        debug_info.append(f"Stored FEN missing or invalid, deriving from {len(moves)} moves")
+        # Output first few moves for debugging
+        if len(moves) > 0:
+            debug_info.append("Sample moves:")
+            for i, move in enumerate(moves[:5]):
+                debug_info.append(f"  {i}: {move.last_move}")
+            if len(moves) > 5:
+                debug_info.append(f"  ... and {len(moves)-5} more")
         
-        if not game:
-            logger.debug(f"Game {selected_game_id} not found, using DEFAULT_FEN")
-            debug_info.append(f"Game {selected_game_id} not found, using DEFAULT_FEN")
-            return DEFAULT_FEN, [], "White: Select a game", "Black: Select a game", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
-        
-        # Get moves for this game, ordered by timestamp
-        moves = session.query(Move).filter(Move.game_id == selected_game_id) \
-            .order_by(Move.timestamp).all()
-        
-        debug_info.append(f"Found {len(moves)} moves for game {selected_game_id}")
-        
-        if not moves:
-            logger.debug(f"No moves found for game {selected_game_id}, using DEFAULT_FEN")
-            debug_info.append(f"No moves found, using DEFAULT_FEN")
-            return DEFAULT_FEN, [], f"White: {game.white_player.name if game.white_player else 'Unknown'}", f"Black: {game.black_player.name if game.black_player else 'Unknown'}", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
-        
-        # Get the latest FEN position or derive it from moves
-        latest_move = moves[-1]
-        debug_info.append(f"Latest move: {latest_move.last_move}")
-        
-        # Check if the latest move has a valid FEN position
-        if latest_move.fen_position and is_valid_fen(latest_move.fen_position):
-            current_fen = latest_move.fen_position
-            logger.debug(f"Using stored FEN for game {selected_game_id}: {current_fen}")
-            debug_info.append(f"Using stored FEN: {current_fen}")
-        else:
-            logger.debug(f"Deriving FEN for game {selected_game_id} from {len(moves)} moves")
-            debug_info.append(f"Stored FEN missing or invalid, deriving from {len(moves)} moves")
-            # Output first few moves for debugging
-            if len(moves) > 0:
-                debug_info.append("Sample moves:")
-                for i, move in enumerate(moves[:5]):
-                    debug_info.append(f"  {i}: {move.last_move}")
-                if len(moves) > 5:
-                    debug_info.append(f"  ... and {len(moves)-5} more")
-            
-            try:
-                current_fen = derive_fen_from_moves(moves)
-                logger.debug(f"Derived FEN: {current_fen}")
-                debug_info.append(f"Derived FEN: {current_fen}")
-            except Exception as e:
-                logger.error(f"Error deriving FEN: {str(e)}")
-                debug_info.append(f"ERROR: Could not derive FEN: {str(e)}")
-                current_fen = DEFAULT_FEN
-        
-        # Format player info
-        white_info = f"White: {game.white_player.name if game.white_player else 'Unknown'}"
-        if game.white_player and game.white_player.title:
-            white_info = f"{game.white_player.title} {white_info}"
-            
-        black_info = f"Black: {game.black_player.name if game.black_player else 'Unknown'}"
-        if game.black_player and game.black_player.title:
-            black_info = f"{game.black_player.title} {black_info}"
-        
-        # Create move history display
-        move_history_items = []
-        for i, move in enumerate(moves):
-            if move.last_move:
-                move_num = (i // 2) + 1
-                if i % 2 == 0:  # White's move
-                    move_item = html.Div([
-                        html.Span(f"{move_num}. ", className="text-muted"),
-                        html.Span(f"{move.last_move}", className="font-weight-bold")
-                    ], className="d-inline-block me-2")
-                else:  # Black's move
-                    move_item = html.Div([
-                        html.Span(f"{move.last_move} ", className="font-weight-bold")
-                    ], className="d-inline-block me-3")
-                move_history_items.append(move_item)
-        
-        # Create rows of moves (pairs of white/black moves)
-        move_rows = []
-        for i in range(0, len(move_history_items), 2):
-            row_items = [move_history_items[i]]
-            if i + 1 < len(move_history_items):
-                row_items.append(move_history_items[i + 1])
-            move_rows.append(html.Div(row_items, className="mb-1"))
-        
-        # Extract move notations for chess.js
-        move_notations = [m.last_move for m in moves if m.last_move]
-        
-        # Final check to make sure we're not sending an empty FEN
-        if not current_fen or not is_valid_fen(current_fen):
-            logger.warning(f"Invalid FEN detected in final output for game {selected_game_id}, using DEFAULT_FEN")
-            debug_info.append(f"WARNING: Invalid derived FEN, falling back to DEFAULT_FEN")
+        try:
+            current_fen = derive_fen_from_moves(moves)
+            logger.debug(f"Derived FEN: {current_fen}")
+            debug_info.append(f"Derived FEN: {current_fen}")
+        except Exception as e:
+            logger.error(f"Error deriving FEN: {str(e)}")
+            debug_info.append(f"ERROR: Could not derive FEN: {str(e)}")
             current_fen = DEFAULT_FEN
+    
+    # Format player info
+    white_info = f"White: {game.white_player.name if game.white_player else 'Unknown'}"
+    if game.white_player and game.white_player.title:
+        white_info = f"{game.white_player.title} {white_info}"
         
-        debug_info.append(f"FINAL FEN being sent to client: {current_fen}")
-        
-        return current_fen, move_notations, white_info, black_info, move_rows, {'display': 'none'}, current_fen, "\n".join(debug_info)
-    except Exception as e:
-        logger.exception(f"Error updating chess board: {str(e)}")
-        debug_info.append(f"ERROR: {str(e)}")
-        return DEFAULT_FEN, [], "Error", "Error", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
-    finally:
-        session.close()
+    black_info = f"Black: {game.black_player.name if game.black_player else 'Unknown'}"
+    if game.black_player and game.black_player.title:
+        black_info = f"{game.black_player.title} {black_info}"
+    
+    # Create move history display
+    move_history_items = []
+    for i, move in enumerate(moves):
+        if move.last_move:
+            move_num = (i // 2) + 1
+            if i % 2 == 0:  # White's move
+                move_item = html.Div([
+                    html.Span(f"{move_num}. ", className="text-muted"),
+                    html.Span(f"{move.last_move}", className="font-weight-bold")
+                ], className="d-inline-block me-2")
+            else:  # Black's move
+                move_item = html.Div([
+                    html.Span(f"{move.last_move} ", className="font-weight-bold")
+                ], className="d-inline-block me-3")
+            move_history_items.append(move_item)
+    
+    # Create rows of moves (pairs of white/black moves)
+    move_rows = []
+    for i in range(0, len(move_history_items), 2):
+        row_items = [move_history_items[i]]
+        if i + 1 < len(move_history_items):
+            row_items.append(move_history_items[i + 1])
+        move_rows.append(html.Div(row_items, className="mb-1"))
+    
+    # Extract move notations for chess.js
+    move_notations = [m.last_move for m in moves if m.last_move]
+    
+    # Final check to make sure we're not sending an empty FEN
+    if not current_fen or not is_valid_fen(current_fen):
+        logger.warning(f"Invalid FEN detected in final output for game {selected_game_id}, using DEFAULT_FEN")
+        debug_info.append(f"WARNING: Invalid derived FEN, falling back to DEFAULT_FEN")
+        current_fen = DEFAULT_FEN
+    
+    debug_info.append(f"FINAL FEN being sent to client: {current_fen}")
+    
+    return current_fen, move_notations, white_info, black_info, move_rows, {'display': 'none'}, current_fen, "\n".join(debug_info)
 
 # Add callback for current system metrics
 @callback(
@@ -975,52 +940,38 @@ def update_chess_board(selected_game_id, n):
     [Input("interval-component", "n_intervals")]
 )
 def update_current_system_metrics(n):
-    session = Session()
-    try:
-        # Get the most recent metrics for each type
-        cpu_metric = session.query(Metric) \
-            .join(MetricType) \
-            .filter(MetricType.name == 'cpu_percent') \
-            .order_by(Metric.timestamp.desc()) \
-            .first()
+    latest_cpu, latest_memory, latest_processes, latest_white_pieces, latest_black_pieces = get_system_metrics()
+    
+    # Format CPU usage
+    if latest_cpu and latest_cpu.value is not None:
+        cpu_text = f"{latest_cpu.value:.1f}%"
+    else:
+        cpu_text = "N/A"
+    
+    # Format memory usage
+    if latest_memory and latest_memory.value is not None:
+        memory_text = f"{latest_memory.value:.1f}%"
+    else:
+        memory_text = "N/A"
+    
+    # Format process count
+    if latest_processes and latest_processes.value is not None:
+        processes_text = f"{int(latest_processes.value)}"
+    else:
+        processes_text = "N/A"
+    
+    # Format chess piece counts
+    if latest_white_pieces is not None:
+        white_pieces_text = f"{latest_white_pieces:.1f}"
+    else:
+        white_pieces_text = "N/A"
         
-        memory_metric = session.query(Metric) \
-            .join(MetricType) \
-            .filter(MetricType.name == 'memory_percent') \
-            .order_by(Metric.timestamp.desc()) \
-            .first()
-        
-        process_metric = session.query(Metric) \
-            .join(MetricType) \
-            .filter(MetricType.name == 'process_count') \
-            .order_by(Metric.timestamp.desc()) \
-            .first()
-            
-        white_pieces_metric = session.query(Metric) \
-            .join(MetricType) \
-            .filter(MetricType.name == 'white_pieces') \
-            .order_by(Metric.timestamp.desc()) \
-            .first()
-            
-        black_pieces_metric = session.query(Metric) \
-            .join(MetricType) \
-            .filter(MetricType.name == 'black_pieces') \
-            .order_by(Metric.timestamp.desc()) \
-            .first()
-        
-        # Format the values
-        cpu_value = f"{cpu_metric.value:.1f}%" if cpu_metric else "N/A"
-        memory_value = f"{memory_metric.value:.1f}%" if memory_metric else "N/A"
-        process_value = f"{int(process_metric.value)}" if process_metric else "N/A"
-        white_pieces_value = f"{int(white_pieces_metric.value)}" if white_pieces_metric else "N/A"
-        black_pieces_value = f"{int(black_pieces_metric.value)}" if black_pieces_metric else "N/A"
-        
-        return cpu_value, memory_value, process_value, white_pieces_value, black_pieces_value
-    except Exception as e:
-        logger.exception(f"Error updating current system metrics: {str(e)}")
-        return "Error", "Error", "Error", "Error", "Error"
-    finally:
-        session.close()
+    if latest_black_pieces is not None:
+        black_pieces_text = f"{latest_black_pieces:.1f}"
+    else:
+        black_pieces_text = "N/A"
+    
+    return cpu_text, memory_text, processes_text, white_pieces_text, black_pieces_text
 
 # Add callback for CPU usage graph
 @callback(
@@ -1713,5 +1664,146 @@ def reset_pagination_on_filter(n_clicks):
     return 1
 
 # Function to get the Dash server
-def get_dash_app():
+def get_dash_app(cache=None):
+    """Return the Dash application instance."""
+    if cache is not None:
+        init_cache(cache)
+        logger.info("Cache initialized in dashboard")
     return dash_app
+
+# Data retrieval functions that can be cached
+@cached_query(timeout=30)
+def get_active_games():
+    """Get list of active games with recent moves."""
+    session = Session()
+    try:
+        ten_min_ago = datetime.now() - timedelta(minutes=10)
+        
+        active_games = session.query(
+            Game.game_id,
+            Game.white_player_id,
+            Game.black_player_id,
+            func.max(Move.timestamp).label('last_move_time')
+        ).join(Move, Game.game_id == Move.game_id) \
+         .filter(Move.timestamp > ten_min_ago) \
+         .group_by(Game.game_id, Game.white_player_id, Game.black_player_id) \
+         .order_by(desc('last_move_time')) \
+         .all()
+        
+        return active_games
+    finally:
+        session.close()
+
+@cached_query(timeout=15)
+def get_games_count():
+    """Get count of total and active games."""
+    session = Session()
+    try:
+        # Total games count
+        total_games = session.query(func.count(Game.id)).scalar()
+        
+        # Active games (with moves in last 10 minutes)
+        ten_min_ago = datetime.now() - timedelta(minutes=10)
+        active_games_count = session.query(
+            func.count(func.distinct(Move.game_id))
+        ).filter(Move.timestamp > ten_min_ago).scalar()
+        
+        return total_games, active_games_count
+    finally:
+        session.close()
+
+@cached_query(timeout=15)
+def get_events_last_minute():
+    """Get count of events in the last minute."""
+    session = Session()
+    try:
+        one_min_ago = datetime.now() - timedelta(minutes=1)
+        events_last_minute = session.query(func.count(RawData.id)) \
+            .filter(RawData.received_timestamp > one_min_ago).scalar()
+        return events_last_minute
+    finally:
+        session.close()
+
+@cached_query(timeout=10)
+def get_latest_event():
+    """Get the latest event received."""
+    session = Session()
+    try:
+        latest_event = session.query(RawData) \
+            .order_by(desc(RawData.received_timestamp)).first()
+        return latest_event
+    finally:
+        session.close()
+
+@cached_query(timeout=60)
+def get_game_data(game_id):
+    """Get game and move data for a specific game."""
+    if not game_id:
+        return None, []
+        
+    session = Session()
+    try:
+        # Get game info
+        game = session.query(Game).filter(Game.game_id == game_id).first()
+        if not game:
+            return None, []
+            
+        # Get moves for this game, ordered by timestamp
+        moves = session.query(Move).filter(Move.game_id == game_id) \
+            .order_by(Move.timestamp).all()
+            
+        return game, moves
+    finally:
+        session.close()
+
+@cached_query(timeout=30)
+def get_recent_games(limit=5):
+    """Get the most recent games."""
+    session = Session()
+    try:
+        # Get 5 most recent games with player names
+        recent_games = session.query(Game) \
+            .order_by(desc(Game.start_time)) \
+            .limit(limit).all()
+        return recent_games
+    finally:
+        session.close()
+
+@cached_query(timeout=30)
+def get_system_metrics():
+    """Get current system metrics."""
+    session = Session()
+    try:
+        # Get latest CPU usage
+        latest_cpu = session.query(Metric) \
+            .join(MetricType, Metric.metric_type_id == MetricType.id) \
+            .filter(MetricType.name == 'cpu_percent') \
+            .order_by(desc(Metric.timestamp)) \
+            .first()
+        
+        # Get latest memory usage
+        latest_memory = session.query(Metric) \
+            .join(MetricType, Metric.metric_type_id == MetricType.id) \
+            .filter(MetricType.name == 'memory_percent') \
+            .order_by(desc(Metric.timestamp)) \
+            .first()
+        
+        # Get process count
+        latest_processes = session.query(Metric) \
+            .join(MetricType, Metric.metric_type_id == MetricType.id) \
+            .filter(MetricType.name == 'process_count') \
+            .order_by(desc(Metric.timestamp)) \
+            .first()
+            
+        # Get chess pieces stats
+        latest_white_pieces = session.query(func.avg(Move.white_piece_count)) \
+            .filter(Move.timestamp > (datetime.now() - timedelta(minutes=10))) \
+            .scalar()
+            
+        latest_black_pieces = session.query(func.avg(Move.black_piece_count)) \
+            .filter(Move.timestamp > (datetime.now() - timedelta(minutes=10))) \
+            .scalar()
+            
+        return latest_cpu, latest_memory, latest_processes, latest_white_pieces, latest_black_pieces
+    finally:
+        session.close()

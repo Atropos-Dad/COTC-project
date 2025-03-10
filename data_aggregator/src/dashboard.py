@@ -93,12 +93,11 @@ dash_app.layout = dbc.Container([
     # Store for debug info
     dcc.Store(id="debug-fen", data=DEFAULT_FEN),
     
-    # Add refresh interval component
-    dcc.Interval(
-        id='interval-component',
-        interval=500,  # in milliseconds
-        n_intervals=0
-    ),
+    # Multiple intervals with different update frequencies
+    dcc.Interval(id="critical-interval", interval=5000),  # 5 seconds for critical stats
+    dcc.Interval(id="standard-interval", interval=15000),  # 15 seconds for standard updates
+    dcc.Interval(id="slow-interval", interval=30000),      # 30 seconds for slow-changing data
+    dcc.Interval(id="graph-interval", interval=60000),     # 60 seconds for graphs
     
     # Dashboard header
     dbc.Row([
@@ -485,7 +484,7 @@ dash_app.layout = dbc.Container([
 @callback(
     [Output("games-count", "children"),
      Output("active-games", "children")],
-    [Input("interval-component", "n_intervals")]
+    [Input("critical-interval", "n_intervals")]
 )
 def update_games_count(n):
     total_games, active_games_count = get_games_count()
@@ -494,7 +493,7 @@ def update_games_count(n):
 # Callback for updating data ingestion rate
 @callback(
     Output("data-rate", "children"),
-    [Input("interval-component", "n_intervals")]
+    [Input("critical-interval", "n_intervals")]
 )
 def update_data_rate(n):
     events_last_minute = get_events_last_minute()
@@ -503,7 +502,7 @@ def update_data_rate(n):
 # Callback for updating latest event
 @callback(
     Output("latest-event", "children"),
-    [Input("interval-component", "n_intervals")]
+    [Input("critical-interval", "n_intervals")]
 )
 def update_latest_event(n):
     latest_event = get_latest_event()
@@ -548,127 +547,103 @@ def update_latest_event(n):
 
 # Callback for updating ingestion graph
 @callback(
-    Output("ingestion-graph", "figure"),
-    [Input("interval-component", "n_intervals")]
+    [Output("ingestion-graph", "figure"),
+     Output("events-distribution", "figure")],
+    [Input("graph-interval", "n_intervals")]
 )
-def update_ingestion_graph(n):
+def update_event_graphs(n):
+    """Combine event-related graphs to reduce HTTP requests."""
     session = Session()
     try:
-        # Get data from the last hour
+        # --- Ingestion Rate Graph ---
+        # Get data for ingestion rate (last hour)
         one_hour_ago = datetime.now() - timedelta(hours=1)
         
-        # SQL query to get data counts per minute
-        query = text("""
-            SELECT 
-                strftime('%Y-%m-%d %H:%M:00', received_timestamp) as minute,
-                COUNT(*) as count
-            FROM 
-                raw_data
-            WHERE 
-                received_timestamp > :one_hour_ago
-            GROUP BY 
-                minute
-            ORDER BY 
-                minute
-        """)
+        # Group by minute and count events
+        event_counts = session.query(
+            func.strftime('%Y-%m-%d %H:%M', RawData.received_timestamp).label('minute'),
+            func.count(RawData.id).label('count')
+        ).filter(RawData.received_timestamp > one_hour_ago) \
+         .group_by('minute') \
+         .order_by('minute') \
+         .all()
         
-        result = session.execute(query, {"one_hour_ago": one_hour_ago})
-        data = [{"minute": row[0], "count": row[1]} for row in result]
+        ingestion_fig = go.Figure()
         
-        if not data:
-            # Create empty figure with message
-            fig = go.Figure()
-            fig.add_annotation(
-                text="No data available for the last hour",
-                xref="paper", yref="paper",
-                x=0.5, y=0.5,
-                showarrow=False,
-                font=dict(size=20)
-            )
-            return fig
+        if event_counts:
+            # Convert to dataframe
+            df = pd.DataFrame([(datetime.strptime(ec.minute, '%Y-%m-%d %H:%M'), ec.count) 
+                              for ec in event_counts], 
+                              columns=['time', 'count'])
+            
+            # Create the figure
+            ingestion_fig = px.bar(df, x='time', y='count',
+                            title='Event Ingestion Rate (per minute)',
+                            labels={'count': 'Events', 'time': 'Time'})
+            
+            ingestion_fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+        else:
+            ingestion_fig.add_annotation(text="No event data available",
+                                 xref="paper", yref="paper",
+                                 x=0.5, y=0.5, showarrow=False)
+            ingestion_fig.update_layout(title='Event Ingestion Rate')
         
-        df = pd.DataFrame(data)
-        df['minute'] = pd.to_datetime(df['minute'])
+        # --- Events Distribution Graph ---
+        # Get distribution of event types (last hour)
+        event_types = session.query(
+            RawData.measurement,
+            func.count(RawData.id).label('count')
+        ).filter(RawData.received_timestamp > one_hour_ago) \
+         .filter(RawData.measurement.isnot(None)) \
+         .group_by(RawData.measurement) \
+         .order_by(desc('count')) \
+         .all()
         
-        fig = px.line(
-            df, 
-            x='minute', 
-            y='count',
-            title="Events Per Minute (Last Hour)",
-            labels={"minute": "Time", "count": "Event Count"}
-        )
+        distribution_fig = go.Figure()
         
-        fig.update_layout(
-            xaxis=dict(tickformat='%H:%M'),
-            yaxis=dict(rangemode='nonnegative'),
-            hovermode='x unified'
-        )
+        if event_types:
+            # Convert to dataframe
+            df = pd.DataFrame([(et.measurement, et.count) for et in event_types],
+                             columns=['event_type', 'count'])
+            
+            # Limit to top 10 event types for readability
+            if len(df) > 10:
+                top_df = df.head(10)
+                
+                # Add an "Other" category for the rest
+                other_count = df.iloc[10:]['count'].sum()
+                if other_count > 0:
+                    top_df = pd.concat([top_df, pd.DataFrame([{'event_type': 'Other', 'count': other_count}])])
+                
+                df = top_df
+            
+            # Create pie chart
+            distribution_fig = px.pie(df, values='count', names='event_type',
+                               title='Event Type Distribution',
+                               hole=0.4)
+            
+            distribution_fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+        else:
+            distribution_fig.add_annotation(text="No event data available",
+                                    xref="paper", yref="paper",
+                                    x=0.5, y=0.5, showarrow=False)
+            distribution_fig.update_layout(title='Event Type Distribution')
         
-        return fig
-    finally:
-        session.close()
-
-# Callback for updating events distribution
-@callback(
-    Output("events-distribution", "figure"),
-    [Input("interval-component", "n_intervals")]
-)
-def update_events_distribution(n):
-    session = Session()
-    try:
-        # Get event types distribution from the last hour
-        one_hour_ago = datetime.now() - timedelta(hours=1)
-        
-        query = text("""
-            SELECT 
-                json_extract(data, '$.tags.event_type') as event_type,
-                COUNT(*) as count
-            FROM 
-                raw_data
-            WHERE 
-                received_timestamp > :one_hour_ago
-                AND json_extract(data, '$.measurement') = 'chess_game'
-            GROUP BY 
-                event_type
-            ORDER BY 
-                count DESC
-        """)
-        
-        result = session.execute(query, {"one_hour_ago": one_hour_ago})
-        data = [{"event_type": row[0] or "unknown", "count": row[1]} for row in result]
-        
-        if not data:
-            # Create empty figure with message
-            fig = go.Figure()
-            fig.add_annotation(
-                text="No chess game events in the last hour",
-                xref="paper", yref="paper",
-                x=0.5, y=0.5,
-                showarrow=False,
-                font=dict(size=20)
-            )
-            return fig
-        
-        df = pd.DataFrame(data)
-        
-        fig = px.pie(
-            df, 
-            values='count', 
-            names='event_type',
-            title="Chess Game Event Types (Last Hour)",
-            hole=0.3
-        )
-        
-        fig.update_traces(textposition='inside', textinfo='percent+label')
-        
-        return fig
+        return ingestion_fig, distribution_fig
+    except Exception as e:
+        logger.exception(f"Error updating event graphs: {str(e)}")
+        empty_fig = go.Figure()
+        empty_fig.add_annotation(text="Error loading data",
+                          xref="paper", yref="paper",
+                          x=0.5, y=0.5, showarrow=False)
+        return empty_fig, empty_fig
     finally:
         session.close()
 
 # Callback for updating recent games table
 @callback(
     Output("recent-games-table", "children"),
-    [Input("interval-component", "n_intervals")]
+    [Input("standard-interval", "n_intervals")]
 )
 def update_recent_games(n):
     recent_games = get_recent_games(limit=5)
@@ -725,7 +700,7 @@ def update_recent_games(n):
 # Callback for game selector dropdown
 @callback(
     Output("game-selector", "options"),
-    [Input("interval-component", "n_intervals")]
+    [Input("standard-interval", "n_intervals")]
 )
 def update_game_selector(n):
     active_games = get_active_games()
@@ -799,7 +774,7 @@ clientside_callback(
     """,
     Output('clientside-script-container', 'children'),
     [Input('current-fen', 'data'),
-     Input('interval-component', 'n_intervals')]
+     Input('standard-interval', 'n_intervals')]
 )
 
 # Callback for updating chess board and related information
@@ -813,7 +788,7 @@ clientside_callback(
      Output("debug-fen", "data"),
      Output("debug-display", "children")],
     [Input("game-selector", "value"),
-     Input("interval-component", "n_intervals")]
+     Input("standard-interval", "n_intervals")]
 )
 def update_chess_board(selected_game_id, n):
     debug_info = []  # List to collect debug info
@@ -923,10 +898,15 @@ def update_chess_board(selected_game_id, n):
      Output("current-memory", "children"),
      Output("current-processes", "children"),
      Output("current-white-pieces", "children"),
-     Output("current-black-pieces", "children")],
-    [Input("interval-component", "n_intervals")]
+     Output("current-black-pieces", "children"),
+     Output("cpu-usage-graph", "figure"),
+     Output("memory-usage-graph", "figure"),
+     Output("network-traffic-graph", "figure")],
+    [Input("standard-interval", "n_intervals")]
 )
-def update_current_system_metrics(n):
+def update_system_metrics_combined(n):
+    """Single callback for all system metrics to reduce HTTP requests."""
+    # Get basic metrics
     latest_cpu, latest_memory, latest_processes, latest_white_pieces, latest_black_pieces = get_system_metrics()
     
     # Format CPU usage
@@ -958,408 +938,108 @@ def update_current_system_metrics(n):
     else:
         black_pieces_text = "N/A"
     
-    return cpu_text, memory_text, processes_text, white_pieces_text, black_pieces_text
-
-# Add callback for CPU usage graph
-@callback(
-    Output("cpu-usage-graph", "figure"),
-    [Input("interval-component", "n_intervals")]
-)
-def update_cpu_usage_graph(n):
+    # Generate CPU usage graph
     session = Session()
     try:
         # Get CPU usage data for the last hour
         one_hour_ago = datetime.now() - timedelta(hours=1)
-        cpu_metrics = session.query(
-            Metric.timestamp, 
-            Metric.value, 
-            MetricOrigin.name.label('origin')
-        ).join(MetricType).join(MetricOrigin)\
-            .filter(MetricType.name == 'cpu_percent')\
-            .filter(Metric.timestamp > one_hour_ago)\
+        cpu_metrics = session.query(Metric.timestamp, Metric.value) \
+            .join(MetricType) \
+            .filter(MetricType.name == 'cpu_percent') \
+            .filter(Metric.timestamp > one_hour_ago) \
             .order_by(Metric.timestamp).all()
         
-        if not cpu_metrics:
-            # Return empty figure if no data
-            return go.Figure().update_layout(
-                title="No CPU usage data available",
-                xaxis_title="Time",
-                yaxis_title="CPU Usage (%)"
-            )
-        
-        # Create dataframe from metrics
-        data = []
-        for metric in cpu_metrics:
-            data.append({
-                'timestamp': metric.timestamp,
-                'cpu_percent': metric.value,
-                'origin': metric.origin
-            })
-        
-        df = pd.DataFrame(data)
-        
-        # Create the figure with color differentiation by origin (hostname)
-        fig = px.line(df, x='timestamp', y='cpu_percent', color='origin',
-                      title="CPU Usage Over Time")
-        fig.update_layout(
-            xaxis_title="Time",
-            yaxis_title="CPU Usage (%)",
-            yaxis=dict(range=[0, 100])
-        )
-        return fig
-    except Exception as e:
-        logger.exception(f"Error updating CPU usage graph: {str(e)}")
-        return go.Figure().update_layout(
-            title=f"Error: {str(e)}",
-            xaxis_title="Time",
-            yaxis_title="CPU Usage (%)"
-        )
-    finally:
-        session.close()
-
-# Add callback for Memory usage graph
-@callback(
-    Output("memory-usage-graph", "figure"),
-    [Input("interval-component", "n_intervals")]
-)
-def update_memory_usage_graph(n):
-    session = Session()
-    try:
-        # Get memory usage data for the last hour
-        one_hour_ago = datetime.now() - timedelta(hours=1)
-        memory_metrics = session.query(
-            Metric.timestamp, 
-            Metric.value, 
-            MetricOrigin.name.label('origin')
-        ).join(MetricType).join(MetricOrigin)\
-            .filter(MetricType.name == 'memory_percent')\
-            .filter(Metric.timestamp > one_hour_ago)\
+        if cpu_metrics:
+            df_cpu = pd.DataFrame(cpu_metrics, columns=['timestamp', 'value'])
+            cpu_fig = px.line(df_cpu, x='timestamp', y='value', 
+                        title='CPU Usage (%)',
+                        labels={'value': 'CPU Usage (%)', 'timestamp': 'Time'})
+            cpu_fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+        else:
+            # Empty figure with message
+            cpu_fig = go.Figure()
+            cpu_fig.add_annotation(text="No CPU data available", 
+                              xref="paper", yref="paper",
+                              x=0.5, y=0.5, showarrow=False)
+            cpu_fig.update_layout(title='CPU Usage (%)')
+    
+        # Get memory usage data
+        memory_metrics = session.query(Metric.timestamp, Metric.value) \
+            .join(MetricType) \
+            .filter(MetricType.name == 'memory_percent') \
+            .filter(Metric.timestamp > one_hour_ago) \
             .order_by(Metric.timestamp).all()
         
-        if not memory_metrics:
-            # Return empty figure if no data
-            return go.Figure().update_layout(
-                title="No memory usage data available",
-                xaxis_title="Time",
-                yaxis_title="Memory Usage (%)"
-            )
-        
-        # Create dataframe from metrics
-        data = []
-        for metric in memory_metrics:
-            data.append({
-                'timestamp': metric.timestamp,
-                'memory_percent': metric.value,
-                'origin': metric.origin
-            })
-        
-        df = pd.DataFrame(data)
-        
-        # Create the figure with color differentiation by origin (hostname)
-        fig = px.line(df, x='timestamp', y='memory_percent', color='origin',
-                      title="Memory Usage Over Time")
-        fig.update_layout(
-            xaxis_title="Time",
-            yaxis_title="Memory Usage (%)",
-            yaxis=dict(range=[0, 100])
-        )
-        return fig
-    except Exception as e:
-        logger.exception(f"Error updating memory usage graph: {str(e)}")
-        return go.Figure().update_layout(
-            title=f"Error: {str(e)}",
-            xaxis_title="Time",
-            yaxis_title="Memory Usage (%)"
-        )
-    finally:
-        session.close()
-
-# Add callback for Network traffic graph
-@callback(
-    Output("network-traffic-graph", "figure"),
-    [Input("interval-component", "n_intervals")]
-)
-def update_network_traffic_graph(n):
-    session = Session()
-    try:
-        # Get network traffic data for the last hour
-        one_hour_ago = datetime.now() - timedelta(hours=1)
-        
-        # Get network metrics - using the exact metric_type from the logs
-        network_metrics = session.query(
-            Metric.timestamp, 
-            Metric.value, 
-            MetricOrigin.name.label('origin'),
-            MetricType.name.label('metric_type')
-        ).join(MetricType).join(MetricOrigin)\
-            .filter(MetricType.name.in_(['network_bytes_sent', 'network_bytes_recv']))\
-            .filter(Metric.timestamp > one_hour_ago)\
+        if memory_metrics:
+            df_memory = pd.DataFrame(memory_metrics, columns=['timestamp', 'value'])
+            memory_fig = px.line(df_memory, x='timestamp', y='value',
+                           title='Memory Usage (%)',
+                           labels={'value': 'Memory Usage (%)', 'timestamp': 'Time'})
+            memory_fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+        else:
+            # Empty figure with message
+            memory_fig = go.Figure()
+            memory_fig.add_annotation(text="No memory data available", 
+                              xref="paper", yref="paper",
+                              x=0.5, y=0.5, showarrow=False)
+            memory_fig.update_layout(title='Memory Usage (%)')
+    
+        # Get network traffic data
+        network_in_metrics = session.query(Metric.timestamp, Metric.value) \
+            .join(MetricType) \
+            .filter(MetricType.name == 'network_bytes_recv') \
+            .filter(Metric.timestamp > one_hour_ago) \
             .order_by(Metric.timestamp).all()
-        
-        if not network_metrics:
-            # Return empty figure if no data
-            return go.Figure().update_layout(
-                title="No network traffic data available",
-                xaxis_title="Time",
-                yaxis_title="Network Traffic (bytes)"
-            )
-        
-        # Create dataframe
-        data = []
-        for metric in network_metrics:
-            data.append({
-                'timestamp': metric.timestamp,
-                'value': metric.value,
-                'origin': metric.origin,
-                'metric_type': metric.metric_type
-            })
-        
-        df = pd.DataFrame(data)
-        
-        # Create the figure with multiple traces
-        fig = go.Figure()
-        
-        # Group by origin and metric_type
-        for (origin, metric_type), group_df in df.groupby(['origin', 'metric_type']):
-            name = f"{origin} - {metric_type.replace('network_bytes_', '')}"
-            color = 'blue' if 'sent' in metric_type else 'green'
             
-            fig.add_trace(go.Scatter(
-                x=group_df['timestamp'],
-                y=group_df['value'],
+        network_out_metrics = session.query(Metric.timestamp, Metric.value) \
+            .join(MetricType) \
+            .filter(MetricType.name == 'network_bytes_sent') \
+            .filter(Metric.timestamp > one_hour_ago) \
+            .order_by(Metric.timestamp).all()
+        
+        # Create a figure with two traces
+        network_fig = go.Figure()
+        
+        if network_in_metrics:
+            df_net_in = pd.DataFrame(network_in_metrics, columns=['timestamp', 'value'])
+            df_net_in['value'] = df_net_in['value'] / 1024  # Convert to KB
+            network_fig.add_trace(go.Scatter(
+                x=df_net_in['timestamp'],
+                y=df_net_in['value'],
                 mode='lines',
-                name=name,
-                line=dict(color=color if 'sent' in metric_type else None)
+                name='Bytes Received (KB)'
             ))
         
-        # Format y-axis to show in MB
-        fig.update_layout(
-            title="Network Traffic Over Time",
-            xaxis_title="Time",
-            yaxis_title="Network Traffic (bytes)",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            yaxis=dict(
-                tickformat=".2s"  # Use SI prefix formatting (K, M, G, etc.)
-            )
+        if network_out_metrics:
+            df_net_out = pd.DataFrame(network_out_metrics, columns=['timestamp', 'value'])
+            df_net_out['value'] = df_net_out['value'] / 1024  # Convert to KB
+            network_fig.add_trace(go.Scatter(
+                x=df_net_out['timestamp'],
+                y=df_net_out['value'],
+                mode='lines',
+                name='Bytes Sent (KB)'
+            ))
+        
+        if not network_in_metrics and not network_out_metrics:
+            network_fig.add_annotation(text="No network data available", 
+                                 xref="paper", yref="paper",
+                                 x=0.5, y=0.5, showarrow=False)
+        
+        network_fig.update_layout(
+            title='Network Traffic',
+            yaxis_title='Traffic (KB)',
+            xaxis_title='Time',
+            margin=dict(l=20, r=20, t=40, b=20)
         )
-        return fig
+        
+        return cpu_text, memory_text, processes_text, white_pieces_text, black_pieces_text, cpu_fig, memory_fig, network_fig
     except Exception as e:
-        logger.exception(f"Error updating network traffic graph: {str(e)}")
-        return go.Figure().update_layout(
-            title=f"Error: {str(e)}",
-            xaxis_title="Time",
-            yaxis_title="Network Traffic (bytes)"
-        )
-    finally:
-        session.close()
-
-# Add callback for combined system metrics graph
-@callback(
-    Output("combined-metrics-graph", "figure"),
-    [Input("interval-component", "n_intervals")]
-)
-def update_combined_metrics_graph(n):
-    session = Session()
-    try:
-        # Get data for the last hour for multiple metrics
-        one_hour_ago = datetime.now() - timedelta(hours=1)
-        
-        # Query for CPU, memory, and process count metrics
-        metrics = session.query(
-            Metric.timestamp, 
-            MetricType.name.label('metric_type'), 
-            Metric.value, 
-            MetricOrigin.name.label('origin')
-        ).join(MetricType).join(MetricOrigin)\
-            .filter(MetricType.name.in_(['cpu_percent', 'memory_percent', 'process_count']))\
-            .filter(Metric.timestamp > one_hour_ago)\
-            .order_by(Metric.timestamp).all()
-        
-        if not metrics:
-            # Return empty figure if no data
-            return go.Figure().update_layout(
-                title="No system metrics data available",
-                xaxis_title="Time",
-                yaxis_title="Value"
-            )
-        
-        # Create dataframe from metrics
-        data = []
-        for metric in metrics:
-            data.append({
-                'timestamp': metric.timestamp,
-                'metric_type': metric.metric_type,
-                'value': metric.value,
-                'origin': metric.origin
-            })
-        
-        df = pd.DataFrame(data)
-        
-        # Create a figure with multiple y-axes
-        fig = go.Figure()
-        
-        # Add CPU percent trace
-        cpu_df = df[df['metric_type'] == 'cpu_percent']
-        if not cpu_df.empty:
-            for origin, group in cpu_df.groupby('origin'):
-                fig.add_trace(go.Scatter(
-                    x=group['timestamp'],
-                    y=group['value'],
-                    mode='lines',
-                    name=f'CPU ({origin})',
-                    line=dict(color='red')
-                ))
-        
-        # Add memory percent trace
-        memory_df = df[df['metric_type'] == 'memory_percent']
-        if not memory_df.empty:
-            for origin, group in memory_df.groupby('origin'):
-                fig.add_trace(go.Scatter(
-                    x=group['timestamp'],
-                    y=group['value'],
-                    mode='lines',
-                    name=f'Memory ({origin})',
-                    line=dict(color='blue')
-                ))
-        
-        # Add process count trace with secondary y-axis
-        process_df = df[df['metric_type'] == 'process_count']
-        if not process_df.empty:
-            for origin, group in process_df.groupby('origin'):
-                fig.add_trace(go.Scatter(
-                    x=group['timestamp'],
-                    y=group['value'],
-                    mode='lines',
-                    name=f'Processes ({origin})',
-                    line=dict(color='green'),
-                    yaxis='y2'
-                ))
-        
-        # Update layout with secondary y-axis
-        fig.update_layout(
-            title="Combined System Metrics",
-            xaxis_title="Time",
-            yaxis=dict(
-                title="Percentage (%)",
-                range=[0, 100]
-            ),
-            yaxis2=dict(
-                title="Process Count",
-                overlaying='y',
-                side='right'
-            ),
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            )
-        )
-        
-        return fig
-    except Exception as e:
-        logger.exception(f"Error updating combined metrics graph: {str(e)}")
-        return go.Figure().update_layout(
-            title=f"Error: {str(e)}",
-            xaxis_title="Time",
-            yaxis_title="Value"
-        )
-    finally:
-        session.close()
-
-# Add callback for chess piece counts graph
-@callback(
-    Output("chess-pieces-graph", "figure"),
-    [Input("interval-component", "n_intervals")]
-)
-def update_chess_pieces_graph(n):
-    session = Session()
-    try:
-        # Get chess piece count data for the last hour
-        one_hour_ago = datetime.now() - timedelta(hours=1)
-        
-        # Query for white_pieces and black_pieces metrics
-        piece_metrics = session.query(
-            Metric.timestamp, 
-            MetricType.name.label('metric_type'), 
-            Metric.value, 
-            MetricOrigin.name.label('origin')
-        ).join(MetricType).join(MetricOrigin)\
-            .filter(MetricType.name.in_(['white_pieces', 'black_pieces']))\
-            .filter(Metric.timestamp > one_hour_ago)\
-            .order_by(Metric.timestamp).all()
-        
-        if not piece_metrics:
-            # Return empty figure if no data
-            return go.Figure().update_layout(
-                title="No chess piece count data available",
-                xaxis_title="Time",
-                yaxis_title="Piece Count"
-            )
-        
-        # Create dataframe from metrics
-        data = []
-        for metric in piece_metrics:
-            data.append({
-                'timestamp': metric.timestamp,
-                'metric_type': metric.metric_type,
-                'value': metric.value,
-                'origin': metric.origin
-            })
-        
-        df = pd.DataFrame(data)
-        
-        # Create the figure
-        fig = go.Figure()
-        
-        # Add white pieces trace
-        white_df = df[df['metric_type'] == 'white_pieces']
-        if not white_df.empty:
-            for origin, group in white_df.groupby('origin'):
-                fig.add_trace(go.Scatter(
-                    x=group['timestamp'],
-                    y=group['value'],
-                    mode='lines',
-                    name=f'White Pieces ({origin})',
-                    line=dict(color='blue')
-                ))
-        
-        # Add black pieces trace
-        black_df = df[df['metric_type'] == 'black_pieces']
-        if not black_df.empty:
-            for origin, group in black_df.groupby('origin'):
-                fig.add_trace(go.Scatter(
-                    x=group['timestamp'],
-                    y=group['value'],
-                    mode='lines',
-                    name=f'Black Pieces ({origin})',
-                    line=dict(color='black')
-                ))
-        
-        # Update layout
-        fig.update_layout(
-            title="Chess Piece Counts Over Time",
-            xaxis_title="Time",
-            yaxis_title="Piece Count",
-            yaxis=dict(range=[0, 16]),  # Maximum of 16 pieces per side in chess
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            )
-        )
-        
-        return fig
-    except Exception as e:
-        logger.exception(f"Error updating chess pieces graph: {str(e)}")
-        return go.Figure().update_layout(
-            title=f"Error: {str(e)}",
-            xaxis_title="Time",
-            yaxis_title="Piece Count"
-        )
+        logger.exception(f"Error updating system metrics: {str(e)}")
+        empty_fig = go.Figure()
+        empty_fig.add_annotation(text="Error loading data", 
+                           xref="paper", yref="paper",
+                           x=0.5, y=0.5, showarrow=False)
+        return "Error", "Error", "Error", "Error", "Error", empty_fig, empty_fig, empty_fig
     finally:
         session.close()
 
@@ -1396,7 +1076,7 @@ def send_message_to_clients(n_clicks, message):
 # Callback for all metrics table
 @callback(
     Output("all-metrics-table", "children"),
-    [Input("interval-component", "n_intervals"),
+    [Input("standard-interval", "n_intervals"),
      Input("metrics-origin-filter", "value"),
      Input("metrics-type-filter", "value"),
      Input("metrics-pagination", "active_page"),
@@ -1513,7 +1193,7 @@ def update_all_metrics(n, origin_filter, type_filter, page, page_size, start_dat
 # Callback to update pagination max value
 @callback(
     Output("metrics-pagination", "max_value"),
-    [Input("interval-component", "n_intervals"),
+    [Input("standard-interval", "n_intervals"),
      Input("metrics-origin-filter", "value"),
      Input("metrics-type-filter", "value"),
      Input("metrics-page-size", "value"),
@@ -1576,7 +1256,7 @@ def update_pagination(n, origin_filter, type_filter, page_size, start_date, end_
 # Callback to populate origin filter dropdown
 @callback(
     Output("metrics-origin-filter", "options"),
-    [Input("interval-component", "n_intervals")]
+    [Input("standard-interval", "n_intervals")]
 )
 def update_origin_filter(n):
     session = Session()
@@ -1593,7 +1273,7 @@ def update_origin_filter(n):
 # Callback to populate metric type filter dropdown
 @callback(
     Output("metrics-type-filter", "options"),
-    [Input("interval-component", "n_intervals"),
+    [Input("standard-interval", "n_intervals"),
      Input("metrics-origin-filter", "value")]
 )
 def update_metric_type_filter(n, origin_filter):
@@ -1869,5 +1549,158 @@ def get_system_metrics():
             .scalar()
             
         return latest_cpu, latest_memory, latest_processes, latest_white_pieces, latest_black_pieces
+    finally:
+        session.close()
+
+@callback(
+    [Output("combined-metrics-graph", "figure"),
+     Output("chess-pieces-graph", "figure")],
+    [Input("slow-interval", "n_intervals")]
+)
+def update_remaining_graphs(n):
+    """Combined callback for less frequently updated graphs."""
+    session = Session()
+    try:
+        # Get data for the last hour
+        one_hour_ago = datetime.now() - timedelta(hours=1)
+        
+        # --- Combined Metrics Graph ---
+        # Query for CPU, memory, and process count metrics
+        metrics = session.query(
+            Metric.timestamp, 
+            MetricType.name.label('metric_type'), 
+            Metric.value
+        ).join(MetricType)\
+            .filter(MetricType.name.in_(['cpu_percent', 'memory_percent', 'process_count']))\
+            .filter(Metric.timestamp > one_hour_ago)\
+            .order_by(Metric.timestamp).all()
+        
+        # Create dataframe
+        data = []
+        for metric in metrics:
+            data.append({
+                'timestamp': metric.timestamp,
+                'metric_type': metric.metric_type,
+                'value': metric.value
+            })
+        
+        df = pd.DataFrame(data) if data else pd.DataFrame(columns=['timestamp', 'metric_type', 'value'])
+        
+        # Create combined metrics figure
+        combined_fig = go.Figure()
+        
+        # Add CPU percent trace
+        cpu_df = df[df['metric_type'] == 'cpu_percent']
+        if not cpu_df.empty:
+            combined_fig.add_trace(go.Scatter(
+                x=cpu_df['timestamp'],
+                y=cpu_df['value'],
+                mode='lines',
+                name='CPU',
+                line=dict(color='red')
+            ))
+        
+        # Add memory percent trace
+        memory_df = df[df['metric_type'] == 'memory_percent']
+        if not memory_df.empty:
+            combined_fig.add_trace(go.Scatter(
+                x=memory_df['timestamp'],
+                y=memory_df['value'],
+                mode='lines',
+                name='Memory',
+                line=dict(color='blue')
+            ))
+        
+        # Add process count with secondary y-axis
+        process_df = df[df['metric_type'] == 'process_count']
+        if not process_df.empty:
+            combined_fig.add_trace(go.Scatter(
+                x=process_df['timestamp'],
+                y=process_df['value'],
+                mode='lines',
+                name='Processes',
+                line=dict(color='green'),
+                yaxis='y2'
+            ))
+        
+        # Update layout
+        combined_fig.update_layout(
+            title="Combined System Metrics",
+            xaxis_title="Time",
+            yaxis=dict(
+                title="Percentage (%)",
+                range=[0, 100]
+            ),
+            yaxis2=dict(
+                title="Process Count",
+                overlaying='y',
+                side='right'
+            ),
+            legend=dict(orientation="h", y=1.1),
+            margin=dict(l=20, r=40, t=40, b=20)
+        )
+        
+        # --- Chess Pieces Graph ---
+        # Get the average piece counts by timestamp
+        piece_counts = session.query(
+            Move.timestamp,
+            func.avg(Move.white_piece_count).label('white_pieces'),
+            func.avg(Move.black_piece_count).label('black_pieces')
+        ).filter(Move.timestamp > one_hour_ago)\
+         .filter(Move.white_piece_count.isnot(None))\
+         .filter(Move.black_piece_count.isnot(None))\
+         .group_by(func.strftime('%Y-%m-%d %H:%M', Move.timestamp))\
+         .order_by(Move.timestamp)\
+         .all()
+        
+        # Create chess pieces figure
+        chess_fig = go.Figure()
+        
+        if piece_counts:
+            # Convert to DataFrame
+            pieces_df = pd.DataFrame([(p.timestamp, p.white_pieces, p.black_pieces) 
+                                     for p in piece_counts], 
+                                     columns=['timestamp', 'white_pieces', 'black_pieces'])
+            
+            # Add traces
+            chess_fig.add_trace(go.Scatter(
+                x=pieces_df['timestamp'],
+                y=pieces_df['white_pieces'],
+                mode='lines',
+                name='White Pieces',
+                line=dict(color='blue')
+            ))
+            
+            chess_fig.add_trace(go.Scatter(
+                x=pieces_df['timestamp'],
+                y=pieces_df['black_pieces'],
+                mode='lines',
+                name='Black Pieces',
+                line=dict(color='black')
+            ))
+            
+            # Update layout
+            chess_fig.update_layout(
+                title="Average Chess Piece Counts",
+                xaxis_title="Time",
+                yaxis_title="Piece Count",
+                yaxis=dict(range=[0, 16]),
+                legend=dict(orientation="h", y=1.1),
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+        else:
+            chess_fig.add_annotation(text="No piece count data available", 
+                             xref="paper", yref="paper",
+                             x=0.5, y=0.5, showarrow=False)
+            chess_fig.update_layout(title="Chess Piece Counts")
+        
+        return combined_fig, chess_fig
+    except Exception as e:
+        logger.exception(f"Error updating remaining graphs: {str(e)}")
+        empty_fig = go.Figure()
+        empty_fig.add_annotation(text="Error loading data", 
+                          xref="paper", yref="paper",
+                          x=0.5, y=0.5, showarrow=False)
+        return empty_fig, empty_fig
     finally:
         session.close()

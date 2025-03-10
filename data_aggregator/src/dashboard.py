@@ -489,15 +489,53 @@ def update_latest_event(n):
         
         if latest_event:
             measurement = latest_event.measurement or "unknown"
-            game_id = "unknown"
-            event_type = "unknown"
+            event_display = ""
             
-            if latest_event.data and isinstance(latest_event.data, dict):
+            # Process based on measurement type
+            if measurement == "chess_game" and latest_event.data and isinstance(latest_event.data, dict):
+                # Chess game events
                 tags = latest_event.data.get('tags', {})
                 if isinstance(tags, dict):
                     game_id = tags.get('game_id', 'unknown')
                     event_type = tags.get('event_type', 'unknown')
+                    event_display = f"{measurement} - {event_type} - Game: {game_id}"
+                else:
+                    event_display = f"{measurement} - incomplete data"
             
+            elif measurement.startswith("metric_") and latest_event.data and isinstance(latest_event.data, dict):
+                # System metrics
+                fields = latest_event.data.get('fields', {})
+                if isinstance(fields, dict):
+                    metric_name = measurement.replace("metric_", "")
+                    metric_value = fields.get('value', 'unknown')
+                    event_display = f"Metric: {metric_name} - Value: {metric_value}"
+                else:
+                    event_display = f"{measurement} - incomplete data"
+            
+            else:
+                # Other event types - extract what we can
+                if latest_event.data and isinstance(latest_event.data, dict):
+                    # Try to find meaningful data to display
+                    tags = latest_event.data.get('tags', {})
+                    fields = latest_event.data.get('fields', {})
+                    
+                    if isinstance(tags, dict) and tags:
+                        # If tags exist, show the first few key/values
+                        tag_items = list(tags.items())[:2]  # Show up to 2 tags
+                        tag_str = ", ".join([f"{k}: {v}" for k, v in tag_items])
+                        event_display = f"{measurement} - {tag_str}"
+                    elif isinstance(fields, dict) and fields:
+                        # If fields exist, show the first few
+                        field_items = list(fields.items())[:2]  # Show up to 2 fields
+                        field_str = ", ".join([f"{k}: {v}" for k, v in field_items])
+                        event_display = f"{measurement} - {field_str}"
+                    else:
+                        # Fall back to showing that data exists but in unknown format
+                        event_display = f"{measurement} - unstructured data"
+                else:
+                    event_display = f"{measurement} - no data"
+            
+            # Add timestamp information
             time_diff = datetime.now() - latest_event.received_timestamp
             seconds_ago = int(time_diff.total_seconds())
             
@@ -507,7 +545,7 @@ def update_latest_event(n):
                 minutes_ago = seconds_ago // 60
                 time_str = f"{minutes_ago} minutes ago"
             
-            return f"{measurement} - {event_type} - Game: {game_id} ({time_str})"
+            return f"{event_display} ({time_str})"
         else:
             return "No events recorded yet"
     finally:
@@ -1662,7 +1700,7 @@ def reset_filters(n_clicks):
         raise dash.exceptions.PreventUpdate
     
     # Reset all filters and go back to page 1
-    return None, None, 1, None, None, None, None, None, None
+    return None, None, 1, None, None, None, None, None
 
 # Callback to reset pagination when Apply Filters is clicked
 @callback(

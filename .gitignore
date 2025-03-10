@@ -19,3 +19,4 @@ data_*.json
 .aider*
 
 logs/
+cache/

@@ -102,100 +102,229 @@ dash_app.layout = dbc.Container([
     # Dashboard header
     dbc.Row([
         dbc.Col([
-            html.H1("Chess Data Dashboard", className="text-center my-4"),
-            html.Hr()
-        ], width=12)
+            html.H1("Chess Data Dashboard", className="text-center mb-4")
+        ])
     ]),
     
-    # Debug information display
+    # Stats row
     dbc.Row([
         dbc.Col([
             dbc.Card([
-                dbc.CardHeader("Debug Information"),
+                dbc.CardHeader("Total Games", className="text-center"),
                 dbc.CardBody([
-                    html.Pre(id="debug-display", className="small")
+                    html.H3(id="games-count", className="text-center")
                 ])
-            ], className="mb-4")
-        ], width=12)
-    ]),
+            ])
+        ], width=3),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Active Games", className="text-center"),
+                dbc.CardBody([
+                    html.H3(id="active-games", className="text-center")
+                ])
+            ])
+        ], width=3),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Events/Minute", className="text-center"),
+                dbc.CardBody([
+                    html.H3(id="data-rate", className="text-center")
+                ])
+            ])
+        ], width=3),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Latest Event", className="text-center"),
+                dbc.CardBody([
+                    html.P(id="latest-event", className="text-center")
+                ])
+            ])
+        ], width=3)
+    ], className="mb-4"),
     
-    # Dashboard metrics row
+    # System metrics
     dbc.Row([
         dbc.Col([
             dbc.Card([
-                dbc.CardHeader("Games Overview"),
-                dbc.CardBody([
-                    html.Div(id="games-count", className="text-center h3"),
-                    html.Div(id="active-games", className="text-center h5 text-muted")
-                ])
-            ], className="mb-4")
-        ], width=4),
-        
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Data Ingestion Rate"),
-                dbc.CardBody([
-                    html.Div(id="data-rate", className="text-center h3"),
-                    html.Div("events per minute", className="text-center text-muted")
-                ])
-            ], className="mb-4")
-        ], width=4),
-        
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Latest Event"),
-                dbc.CardBody([
-                    html.Div(id="latest-event", className="text-center h5")
-                ])
-            ], className="mb-4")
-        ], width=4)
-    ]),
-    
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Data Ingestion Over Time"),
-                dbc.CardBody([
-                    dcc.Graph(id="ingestion-graph")
-                ])
-            ], className="mb-4")
-        ], width=12)
-    ]),
-    
-    # System Metrics Section
-    dbc.Row([
-        dbc.Col([
-            html.H2("System Metrics", className="mt-4 mb-3")
-        ], width=12)
-    ]),
-    
-    # All Metrics Table Section
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("All Metrics"),
+                dbc.CardHeader("System Metrics", className="text-center"),
                 dbc.CardBody([
                     dbc.Row([
                         dbc.Col([
-                            html.Label("Filter by Origin:"),
-                            dcc.Dropdown(
-                                id="metrics-origin-filter",
-                                options=[],
-                                placeholder="Select origin...",
-                                clearable=True
-                            )
-                        ], width=4),
+                            html.Div("CPU Usage: ", className="fw-bold"),
+                            html.Span(id="current-cpu")
+                        ], width=3),
                         dbc.Col([
-                            html.Label("Filter by Metric Type:"),
-                            dcc.Dropdown(
-                                id="metrics-type-filter",
-                                options=[],
-                                placeholder="Select metric type...",
-                                clearable=True
-                            )
-                        ], width=4),
+                            html.Div("Memory Usage: ", className="fw-bold"),
+                            html.Span(id="current-memory")
+                        ], width=3),
                         dbc.Col([
-                            html.Label("Records per page:"),
+                            html.Div("Processes: ", className="fw-bold"),
+                            html.Span(id="current-processes")
+                        ], width=2),
+                        dbc.Col([
+                            html.Div("White Pieces: ", className="fw-bold"),
+                            html.Span(id="current-white-pieces")
+                        ], width=2),
+                        dbc.Col([
+                            html.Div("Black Pieces: ", className="fw-bold"),
+                            html.Span(id="current-black-pieces")
+                        ], width=2)
+                    ])
+                ])
+            ])
+        ])
+    ], className="mb-4"),
+    
+    # System metrics graphs - Combined into one row for system metrics graphs
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("CPU Usage", className="text-center"),
+                dbc.CardBody([
+                    dcc.Graph(id="cpu-usage-graph", style={"height": "300px"})
+                ])
+            ])
+        ], width=4),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Memory Usage", className="text-center"),
+                dbc.CardBody([
+                    dcc.Graph(id="memory-usage-graph", style={"height": "300px"})
+                ])
+            ])
+        ], width=4),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Network Traffic", className="text-center"),
+                dbc.CardBody([
+                    dcc.Graph(id="network-traffic-graph", style={"height": "300px"})
+                ])
+            ])
+        ], width=4)
+    ], className="mb-4"),
+    
+    # Event graphs - Combined into one row
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Event Ingestion Rate", className="text-center"),
+                dbc.CardBody([
+                    dcc.Graph(id="ingestion-graph", style={"height": "300px"})
+                ])
+            ])
+        ], width=6),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Event Type Distribution", className="text-center"),
+                dbc.CardBody([
+                    dcc.Graph(id="events-distribution", style={"height": "300px"})
+                ])
+            ])
+        ], width=6)
+    ], className="mb-4"),
+    
+    # Additional metrics graphs - Combined into one row
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Combined System Metrics", className="text-center"),
+                dbc.CardBody([
+                    dcc.Graph(id="combined-metrics-graph", style={"height": "300px"})
+                ])
+            ])
+        ], width=6),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Chess Piece Count", className="text-center"),
+                dbc.CardBody([
+                    dcc.Graph(id="chess-pieces-graph", style={"height": "300px"})
+                ])
+            ])
+        ], width=6)
+    ], className="mb-4"),
+    
+    # Chess board and recent games
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Chess Board", className="text-center"),
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            dcc.Dropdown(
+                                id="game-selector",
+                                placeholder="Select game to view"
+                            )
+                        ], width=12, className="mb-3")
+                    ]),
+                    dbc.Row([
+                        dbc.Col([
+                            html.H5(id="white-player"),
+                            html.H5(id="black-player"),
+                            html.Div(id="board-container", style={"height": "400px", "width": "400px"}),
+                            # Placeholder for board when no game is selected
+                            html.Div(id="board-placeholder", className="text-center p-5 border", 
+                                    children=["Select a game to view the board"],
+                                    style={"height": "400px", "width": "400px", "display": "block"})
+                        ], width=6),
+                        dbc.Col([
+                            html.H5("Move History"),
+                            html.Div(id="move-history", style={"max-height": "400px", "overflow-y": "auto"})
+                        ], width=6)
+                    ])
+                ])
+            ])
+        ], width=8),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Recent Games", className="text-center"),
+                dbc.CardBody([
+                    html.Div(id="recent-games-table")
+                ])
+            ], className="mb-4"),
+            dbc.Card([
+                dbc.CardHeader("Send Message to Clients", className="text-center"),
+                dbc.CardBody([
+                    dbc.Textarea(id="client-message", placeholder="Enter message to send to all clients", className="mb-2"),
+                    dbc.Button("Send", id="send-message-button", color="primary", className="w-100")
+                ])
+            ])
+        ], width=4)
+    ], className="mb-4"),
+    
+    # Debug info
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Debug Info", className="text-center"),
+                dbc.CardBody([
+                    html.Pre(id="debug-display", style={"max-height": "200px", "overflow-y": "auto"})
+                ])
+            ])
+        ])
+    ], className="mb-4"),
+    
+    # Metrics table
+    dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("All Metrics", className="text-center"),
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Origin:"),
+                            dcc.Dropdown(id="metrics-origin-filter", multi=True)
+                        ], width=3),
+                        dbc.Col([
+                            html.Label("Metric Type:"),
+                            dcc.Dropdown(id="metrics-type-filter", multi=True)
+                        ], width=3),
+                        dbc.Col([
+                            html.Label("Date Range:"),
+                            dcc.DatePickerRange(id="metrics-date-range")
+                        ], width=3),
+                        dbc.Col([
+                            html.Label("Page Size:"),
                             dcc.Dropdown(
                                 id="metrics-page-size",
                                 options=[
@@ -204,279 +333,39 @@ dash_app.layout = dbc.Container([
                                     {"label": "50", "value": 50},
                                     {"label": "100", "value": 100}
                                 ],
-                                value=25,
-                                clearable=False
+                                value=25
                             )
-                        ], width=4)
+                        ], width=3)
                     ], className="mb-3"),
                     dbc.Row([
                         dbc.Col([
-                            html.Label("Filter by Date Range:"),
-                            dcc.DatePickerRange(
-                                id="metrics-date-range",
-                                start_date_placeholder_text="Start Date",
-                                end_date_placeholder_text="End Date",
-                                clearable=True,
-                                with_portal=True,
-                                className="mb-3"
-                            )
-                        ], width=12)
-                    ]),
-                    dbc.Row([
+                            html.Label("Min Value:"),
+                            dbc.Input(id="metrics-min-value", type="number")
+                        ], width=2),
                         dbc.Col([
-                            html.Label("Filter by Value Range:"),
-                            dbc.Row([
-                                dbc.Col([
-                                    dbc.Input(
-                                        id="metrics-min-value",
-                                        type="number",
-                                        placeholder="Min Value",
-                                        step="any"
-                                    )
-                                ], width=6),
-                                dbc.Col([
-                                    dbc.Input(
-                                        id="metrics-max-value",
-                                        type="number",
-                                        placeholder="Max Value",
-                                        step="any"
-                                    )
-                                ], width=6)
-                            ]),
-                            html.Small("Set min and max to filter by range", className="text-muted")
-                        ], width=6, className="mb-3"),
+                            html.Label("Max Value:"),
+                            dbc.Input(id="metrics-max-value", type="number")
+                        ], width=2),
                         dbc.Col([
-                            html.Label("Search Exact Value:"),
-                            dbc.Row([
-                                dbc.Col([
-                                    dbc.Input(
-                                        id="metrics-exact-value",
-                                        type="number",
-                                        placeholder="Exact Value",
-                                        step="any"
-                                    )
-                                ], width=7),
-                                dbc.Col([
-                                    dbc.Input(
-                                        id="metrics-value-tolerance",
-                                        type="number",
-                                        placeholder="±Tolerance",
-                                        step="any",
-                                        min=0
-                                    )
-                                ], width=5)
-                            ]),
-                            html.Small("Add tolerance for fuzzy matching", className="text-muted")
-                        ], width=6, className="mb-3")
-                    ]),
-                    dbc.Row([
+                            html.Label("Exact Value:"),
+                            dbc.Input(id="metrics-exact-value", type="number")
+                        ], width=2),
                         dbc.Col([
-                            dbc.Button("Reset Filters", id="reset-metrics-filters", color="secondary", size="sm", className="mb-3 me-2"),
-                            dbc.Button("Apply Filters", id="apply-metrics-filters", color="primary", size="sm", className="mb-3")
-                        ], width=12)
-                    ]),
-                    html.Div(id="all-metrics-table"),
-                    dbc.Row([
+                            html.Label("Tolerance:"),
+                            dbc.Input(id="metrics-value-tolerance", type="number", value=0.1)
+                        ], width=2),
                         dbc.Col([
-                            dbc.Pagination(
-                                id="metrics-pagination",
-                                max_value=5,
-                                first_last=True,
-                                previous_next=True,
-                                active_page=1,
-                                step=2,
-                                fully_expanded=False
-                            )
-                        ], width=12, className="d-flex justify-content-center mt-3")
-                    ])
-                ])
-            ], className="mb-4")
-        ], width=12)
-    ]),
-    
-    # Message to Clients Section
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Send Message to Clients"),
-                dbc.CardBody([
-                    dbc.Input(id="client-message", placeholder="Enter message for clients...", type="text"),
-                    dbc.Button("Send Message", id="send-message-button", color="primary", className="mt-2")
-                ])
-            ], className="mb-4")
-        ], width=12)
-    ]),
-    
-    # Current System Metrics
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("CPU Usage"),
-                dbc.CardBody([
-                    html.Div(id="current-cpu", className="text-center h3"),
-                    html.Div("percent", className="text-center text-muted")
-                ])
-            ], className="mb-4")
-        ], width=3),
-        
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Memory Usage"),
-                dbc.CardBody([
-                    html.Div(id="current-memory", className="text-center h3"),
-                    html.Div("percent", className="text-center text-muted")
-                ])
-            ], className="mb-4")
-        ], width=3),
-        
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Process Count"),
-                dbc.CardBody([
-                    html.Div(id="current-processes", className="text-center h3"),
-                    html.Div("processes", className="text-center text-muted")
-                ])
-            ], className="mb-4")
-        ], width=2),
-        
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("White Pieces"),
-                dbc.CardBody([
-                    html.Div(id="current-white-pieces", className="text-center h3"),
-                    html.Div("pieces", className="text-center text-muted")
-                ])
-            ], className="mb-4")
-        ], width=2),
-        
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Black Pieces"),
-                dbc.CardBody([
-                    html.Div(id="current-black-pieces", className="text-center h3"),
-                    html.Div("pieces", className="text-center text-muted")
-                ])
-            ], className="mb-4")
-        ], width=2)
-    ]),
-    
-    # CPU and Memory Usage
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("CPU Usage Over Time"),
-                dbc.CardBody([
-                    dcc.Graph(id="cpu-usage-graph")
-                ])
-            ], className="mb-4")
-        ], width=6),
-        
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Memory Usage Over Time"),
-                dbc.CardBody([
-                    dcc.Graph(id="memory-usage-graph")
-                ])
-            ], className="mb-4")
-        ], width=6)
-    ]),
-    
-    # Network Usage
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Network Traffic"),
-                dbc.CardBody([
-                    dcc.Graph(id="network-traffic-graph")
-                ])
-            ], className="mb-4")
-        ], width=12),
-    ]),
-    
-    # Combined System Metrics
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Combined System Metrics"),
-                dbc.CardBody([
-                    dcc.Graph(id="combined-metrics-graph")
-                ])
-            ], className="mb-4")
-        ], width=12)
-    ]),
-    
-    # Chess Piece Counts
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Chess Piece Counts Over Time"),
-                dbc.CardBody([
-                    dcc.Graph(id="chess-pieces-graph")
-                ])
-            ], className="mb-4")
-        ], width=12)
-    ]),
-    
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Game Events Distribution"),
-                dbc.CardBody([
-                    dcc.Graph(id="events-distribution")
-                ])
-            ], className="mb-4")
-        ], width=6),
-        
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Recent Games"),
-                dbc.CardBody([
-                    html.Div(id="recent-games-table")
-                ])
-            ], className="mb-4")
-        ], width=6)
-    ]),
-    
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader([
-                    html.Span("Active Chess Game", className="me-auto"),
-                    html.Div([
-                        dcc.Dropdown(
-                            id='game-selector',
-                            placeholder="Select a game...",
-                            style={
-                                'width': '500px',  # Increased width
-                                'min-width': '300px',  # Minimum width
-                                'white-space': 'normal',  # Allow text to wrap
-                                'text-overflow': 'ellipsis'  # Add ellipsis for overflow
-                            }
-                        )
-                    ], style={'min-width': '500px'})  # Container div width
-                ], className="d-flex justify-content-between align-items-center"),
-                dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col([
-                            html.Div(id="board-container", style={'width': '400px', 'height': '400px', 'position': 'relative'}),
-                            html.Div(id="board-placeholder", children=[
-                                html.Div("Chess board will appear here", 
-                                         className="text-center text-muted p-5 border", 
-                                         style={'height': '400px', 'display': 'flex', 'justifyContent': 'center', 'alignItems': 'center'})
-                            ]),
                             html.Div([
-                                html.Div(id="white-player", className="mt-2"),
-                                html.Div(id="black-player", className="mt-1")
-                            ])
-                        ], width=6),
-                        dbc.Col([
-                            html.H5("Move History"),
-                            html.Div(id="move-history", className="border p-2", style={'height': '400px', 'overflowY': 'auto'})
-                        ], width=6)
-                    ])
+                                dbc.Button("Apply", id="apply-metrics-filters", color="primary", className="me-2"),
+                                dbc.Button("Reset", id="reset-metrics-filters", color="secondary")
+                            ], className="d-flex align-items-end h-100")
+                        ], width=4)
+                    ], className="mb-3"),
+                    html.Div(id="all-metrics-table"),
+                    dbc.Pagination(id="metrics-pagination", active_page=1, max_value=1, first_last=True, previous_next=True)
                 ])
-            ], className="mb-4")
-        ], width=12)
+            ])
+        ])
     ])
 ], fluid=True)
 

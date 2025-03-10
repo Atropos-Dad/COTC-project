@@ -15,6 +15,7 @@ import logging
 import json
 import requests
 import functools
+from sqlalchemy.orm import joinedload
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -686,36 +687,29 @@ def update_recent_games(n):
         ]))
     ]
     
-    session = Session()
-    try:
-        rows = []
-        for game in recent_games:
-            # Count moves for this game
-            move_count = session.query(func.count(Move.id)) \
-                .filter(Move.game_id == game.game_id).scalar()
-            
-            # Format time
-            time_diff = datetime.now() - game.start_time
-            if time_diff.days > 0:
-                time_str = f"{time_diff.days}d ago"
-            elif time_diff.seconds > 3600:
-                time_str = f"{time_diff.seconds // 3600}h ago"
-            else:
-                time_str = f"{time_diff.seconds // 60}m ago"
-            
-            # Get player names as strings
-            white_name = game.white_player.name if game.white_player else "Unknown"
-            black_name = game.black_player.name if game.black_player else "Unknown"
-            
-            rows.append(html.Tr([
-                html.Td(game.game_id),
-                html.Td(white_name),
-                html.Td(black_name),
-                html.Td(time_str),
-                html.Td(move_count)
-            ]))
-    finally:
-        session.close()
+    rows = []
+    for game in recent_games:
+        # Format time
+        time_diff = datetime.now() - game['start_time']
+        if time_diff.days > 0:
+            time_str = f"{time_diff.days}d ago"
+        elif time_diff.seconds > 3600:
+            time_str = f"{time_diff.seconds // 3600}h ago"
+        else:
+            time_str = f"{time_diff.seconds // 60}m ago"
+        
+        # Get player names and move count
+        white_name = game['white_player_name']
+        black_name = game['black_player_name']
+        move_count = game['move_count']
+        
+        rows.append(html.Tr([
+            html.Td(game['game_id']),
+            html.Td(white_name),
+            html.Td(black_name),
+            html.Td(time_str),
+            html.Td(move_count)
+        ]))
     
     table_body = [html.Tbody(rows)]
     
@@ -741,29 +735,22 @@ def update_game_selector(n):
     
     # Format options for dropdown
     options = []
-    session = Session()
-    try:
-        for game_id, white_player_id, black_player_id, last_move_time in active_games:
-            # Get player names from the database
-            white_player = session.query(Player).filter(Player.id == white_player_id).first() if white_player_id else None
-            black_player = session.query(Player).filter(Player.id == black_player_id).first() if black_player_id else None
-            
-            white_name = white_player.name if white_player else "Unknown"
-            black_name = black_player.name if black_player else "Unknown"
-            
-            # Format the time difference
-            time_diff = datetime.now() - last_move_time
-            if time_diff.seconds < 60:
-                time_str = f"{time_diff.seconds}s ago"
-            else:
-                time_str = f"{time_diff.seconds // 60}m ago"
-            
-            options.append({
-                "label": f"{white_name} vs {black_name} ({game_id}) - {time_str}",
-                "value": game_id
-            })
-    finally:
-        session.close()
+    for game in active_games:
+        # Get player names
+        white_name = game['white_player_name']
+        black_name = game['black_player_name']
+        
+        # Format the time difference
+        time_diff = datetime.now() - game['last_move_time']
+        if time_diff.seconds < 60:
+            time_str = f"{time_diff.seconds}s ago"
+        else:
+            time_str = f"{time_diff.seconds // 60}m ago"
+        
+        options.append({
+            "label": f"{white_name} vs {black_name} ({game['game_id']}) - {time_str}",
+            "value": game['game_id']
+        })
     
     return options
 
@@ -853,15 +840,15 @@ def update_chess_board(selected_game_id, n):
     if not moves:
         logger.debug(f"No moves found for game {selected_game_id}, using DEFAULT_FEN")
         debug_info.append(f"No moves found, using DEFAULT_FEN")
-        return DEFAULT_FEN, [], f"White: {game.white_player.name if game.white_player else 'Unknown'}", f"Black: {game.black_player.name if game.black_player else 'Unknown'}", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
+        return DEFAULT_FEN, [], f"White: {game['white_player']['name'] if game['white_player']['name'] else 'Unknown'}", f"Black: {game['black_player']['name'] if game['black_player']['name'] else 'Unknown'}", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
     
     # Get the latest FEN position or derive it from moves
     latest_move = moves[-1]
-    debug_info.append(f"Latest move: {latest_move.last_move}")
+    debug_info.append(f"Latest move: {latest_move['last_move']}")
     
     # Check if the latest move has a valid FEN position
-    if latest_move.fen_position and is_valid_fen(latest_move.fen_position):
-        current_fen = latest_move.fen_position
+    if latest_move['fen_position'] and is_valid_fen(latest_move['fen_position']):
+        current_fen = latest_move['fen_position']
         logger.debug(f"Using stored FEN for game {selected_game_id}: {current_fen}")
         debug_info.append(f"Using stored FEN: {current_fen}")
     else:
@@ -871,7 +858,7 @@ def update_chess_board(selected_game_id, n):
         if len(moves) > 0:
             debug_info.append("Sample moves:")
             for i, move in enumerate(moves[:5]):
-                debug_info.append(f"  {i}: {move.last_move}")
+                debug_info.append(f"  {i}: {move['last_move']}")
             if len(moves) > 5:
                 debug_info.append(f"  ... and {len(moves)-5} more")
         
@@ -885,27 +872,27 @@ def update_chess_board(selected_game_id, n):
             current_fen = DEFAULT_FEN
     
     # Format player info
-    white_info = f"White: {game.white_player.name if game.white_player else 'Unknown'}"
-    if game.white_player and game.white_player.title:
-        white_info = f"{game.white_player.title} {white_info}"
+    white_info = f"White: {game['white_player']['name'] if game['white_player']['name'] else 'Unknown'}"
+    if game['white_player']['name'] and game['white_player']['title']:
+        white_info = f"{game['white_player']['title']} {white_info}"
         
-    black_info = f"Black: {game.black_player.name if game.black_player else 'Unknown'}"
-    if game.black_player and game.black_player.title:
-        black_info = f"{game.black_player.title} {black_info}"
+    black_info = f"Black: {game['black_player']['name'] if game['black_player']['name'] else 'Unknown'}"
+    if game['black_player']['name'] and game['black_player']['title']:
+        black_info = f"{game['black_player']['title']} {black_info}"
     
     # Create move history display
     move_history_items = []
     for i, move in enumerate(moves):
-        if move.last_move:
+        if move['last_move']:
             move_num = (i // 2) + 1
             if i % 2 == 0:  # White's move
                 move_item = html.Div([
                     html.Span(f"{move_num}. ", className="text-muted"),
-                    html.Span(f"{move.last_move}", className="font-weight-bold")
+                    html.Span(f"{move['last_move']}", className="font-weight-bold")
                 ], className="d-inline-block me-2")
             else:  # Black's move
                 move_item = html.Div([
-                    html.Span(f"{move.last_move} ", className="font-weight-bold")
+                    html.Span(f"{move['last_move']} ", className="font-weight-bold")
                 ], className="d-inline-block me-3")
             move_history_items.append(move_item)
     
@@ -918,7 +905,7 @@ def update_chess_board(selected_game_id, n):
         move_rows.append(html.Div(row_items, className="mb-1"))
     
     # Extract move notations for chess.js
-    move_notations = [m.last_move for m in moves if m.last_move]
+    move_notations = [m['last_move'] for m in moves if m['last_move']]
     
     # Final check to make sure we're not sending an empty FEN
     if not current_fen or not is_valid_fen(current_fen):
@@ -1646,12 +1633,9 @@ def update_metric_type_filter(n, origin_filter):
     [Input("reset-metrics-filters", "n_clicks")]
 )
 def reset_filters(n_clicks):
-    if n_clicks is None:
-        # Don't trigger on initial load
-        raise dash.exceptions.PreventUpdate
-    
+    """Reset all metric filters to default values."""
     # Reset all filters and go back to page 1
-    return None, None, 1, None, None, None, None, None
+    return None, None, 1, None, None, None, None, None, None
 
 # Callback to reset pagination when Apply Filters is clicked
 @callback(
@@ -1679,6 +1663,7 @@ def get_active_games():
     try:
         ten_min_ago = datetime.now() - timedelta(minutes=10)
         
+        # Get game_id and player info for games with recent moves
         active_games = session.query(
             Game.game_id,
             Game.white_player_id,
@@ -1690,7 +1675,31 @@ def get_active_games():
          .order_by(desc('last_move_time')) \
          .all()
         
-        return active_games
+        # Get all relevant player data in a single query
+        player_ids = []
+        for _, white_id, black_id, _ in active_games:
+            if white_id:
+                player_ids.append(white_id)
+            if black_id:
+                player_ids.append(black_id)
+        
+        players = {}
+        if player_ids:
+            player_records = session.query(Player).filter(Player.id.in_(player_ids)).all()
+            for player in player_records:
+                players[player.id] = player.name
+        
+        # Create a list of dictionaries with all needed data
+        result = []
+        for game_id, white_id, black_id, last_move_time in active_games:
+            result.append({
+                'game_id': game_id,
+                'white_player_name': players.get(white_id, "Unknown") if white_id else "Unknown",
+                'black_player_name': players.get(black_id, "Unknown") if black_id else "Unknown",
+                'last_move_time': last_move_time
+            })
+        
+        return result
     finally:
         session.close()
 
@@ -1743,16 +1752,45 @@ def get_game_data(game_id):
         
     session = Session()
     try:
-        # Get game info
-        game = session.query(Game).filter(Game.game_id == game_id).first()
+        # Get game info with eager loading of relationships
+        game = session.query(Game) \
+            .options(joinedload(Game.white_player), joinedload(Game.black_player)) \
+            .filter(Game.game_id == game_id).first()
+            
         if not game:
             return None, []
+            
+        # Create a dictionary from the game data to avoid detached objects
+        game_data = {
+            'game_id': game.game_id,
+            'white_player': {
+                'name': game.white_player.name if game.white_player else None,
+                'title': game.white_player.title if game.white_player and hasattr(game.white_player, 'title') else None
+            },
+            'black_player': {
+                'name': game.black_player.name if game.black_player else None,
+                'title': game.black_player.title if game.black_player and hasattr(game.black_player, 'title') else None
+            }
+        }
             
         # Get moves for this game, ordered by timestamp
         moves = session.query(Move).filter(Move.game_id == game_id) \
             .order_by(Move.timestamp).all()
             
-        return game, moves
+        # Convert move objects to dictionaries
+        move_data = []
+        for move in moves:
+            move_data.append({
+                'last_move': move.last_move,
+                'fen_position': move.fen_position,
+                'timestamp': move.timestamp,
+                'white_time': move.white_time,
+                'black_time': move.black_time,
+                'white_piece_count': move.white_piece_count,
+                'black_piece_count': move.black_piece_count
+            })
+            
+        return game_data, move_data
     finally:
         session.close()
 
@@ -1761,11 +1799,37 @@ def get_recent_games(limit=5):
     """Get the most recent games."""
     session = Session()
     try:
-        # Get 5 most recent games with player names
+        # Get 5 most recent games with player names, eagerly loading relationships
         recent_games = session.query(Game) \
+            .options(joinedload(Game.white_player), joinedload(Game.black_player)) \
             .order_by(desc(Game.start_time)) \
             .limit(limit).all()
-        return recent_games
+            
+        # Also preload move counts to avoid additional queries
+        game_ids = [game.game_id for game in recent_games]
+        move_counts = {}
+        if game_ids:
+            move_count_results = session.query(
+                Move.game_id, 
+                func.count(Move.id).label('move_count')
+            ).filter(Move.game_id.in_(game_ids)) \
+             .group_by(Move.game_id).all()
+            
+            for game_id, count in move_count_results:
+                move_counts[game_id] = count
+                
+        # Create a clean dictionary of data to cache instead of ORM objects
+        result = []
+        for game in recent_games:
+            result.append({
+                'game_id': game.game_id,
+                'white_player_name': game.white_player.name if game.white_player else "Unknown",
+                'black_player_name': game.black_player.name if game.black_player else "Unknown",
+                'start_time': game.start_time,
+                'move_count': move_counts.get(game.game_id, 0)
+            })
+        
+        return result
     finally:
         session.close()
 

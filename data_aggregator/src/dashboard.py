@@ -462,7 +462,7 @@ def update_event_graphs(n):
         
         # Group by minute and count events
         event_counts = session.query(
-            func.strftime('%Y-%m-%d %H:%M', RawData.received_timestamp).label('minute'),
+            func.to_char(func.date_trunc('minute', RawData.received_timestamp), 'YYYY-MM-DD HH24:MI').label('minute'),
             func.count(RawData.id).label('count')
         ).filter(RawData.received_timestamp > one_hour_ago) \
          .group_by('minute') \
@@ -817,15 +817,15 @@ def update_system_metrics_combined(n):
     # Generate CPU usage graph
     session = Session()
     try:
-        # Query data for the CPU usage graph - use SQLite compatible functions
+        # Query data for the CPU usage graph - use PostgreSQL compatible functions
         cpu_metrics = session.query(
-            func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp).label('minute'),
+            func.to_char(func.date_trunc('minute', Metric.timestamp), 'YYYY-MM-DD HH24:MI:00').label('minute'),
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'cpu_percent') \
           .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
-          .group_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
-          .order_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .group_by(func.date_trunc('minute', Metric.timestamp)) \
+          .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
         
         # Extract data for plotting
@@ -851,13 +851,13 @@ def update_system_metrics_combined(n):
         
         # Query data for the Memory usage graph
         memory_metrics = session.query(
-            func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp).label('minute'),
+            func.to_char(func.date_trunc('minute', Metric.timestamp), 'YYYY-MM-DD HH24:MI:00').label('minute'),
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'memory_percent') \
           .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
-          .group_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
-          .order_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .group_by(func.date_trunc('minute', Metric.timestamp)) \
+          .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
         
         # Extract data for plotting
@@ -883,23 +883,23 @@ def update_system_metrics_combined(n):
         
         # Query data for Network traffic graph
         network_in_metrics = session.query(
-            func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp).label('minute'),
+            func.to_char(func.date_trunc('minute', Metric.timestamp), 'YYYY-MM-DD HH24:MI:00').label('minute'),
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'network_in_bytes') \
           .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
-          .group_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
-          .order_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .group_by(func.date_trunc('minute', Metric.timestamp)) \
+          .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
         
         network_out_metrics = session.query(
-            func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp).label('minute'),
+            func.to_char(func.date_trunc('minute', Metric.timestamp), 'YYYY-MM-DD HH24:MI:00').label('minute'),
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'network_out_bytes') \
           .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
-          .group_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
-          .order_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .group_by(func.date_trunc('minute', Metric.timestamp)) \
+          .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
         
         # Extract data for plotting
@@ -1032,9 +1032,6 @@ def update_all_metrics(n, origin_filter, type_filter, page, page_size, start_dat
             if tolerance is not None and tolerance > 0:
                 # Use between for tolerance range
                 query = query.filter(Metric.value.between(exact_value - tolerance, exact_value + tolerance))
-            else:
-                # Use exact match
-                query = query.filter(Metric.value == exact_value)
             
         # Get total count for pagination
         total_count = query.count()
@@ -1476,7 +1473,7 @@ def get_latest_piece_counts():
         session.close()
 
 @callback(
-    [Output("combined-metrics-graph", "figure")],
+    Output("combined-metrics-graph", "figure"),
     [Input("slow-interval", "n_intervals")]
 )
 def update_combined_metrics(n):
@@ -1562,14 +1559,14 @@ def update_combined_metrics(n):
             margin=dict(l=20, r=40, t=40, b=20)
         )
         
-        return [combined_fig]
+        return combined_fig
     except Exception as e:
         logger.exception(f"Error updating combined metrics graph: {str(e)}")
         empty_fig = go.Figure()
         empty_fig.add_annotation(text="Error loading data", 
                           xref="paper", yref="paper",
                           x=0.5, y=0.5, showarrow=False)
-        return [empty_fig]
+        return empty_fig
     finally:
         session.close()
 

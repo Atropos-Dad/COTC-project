@@ -377,7 +377,14 @@ dash_app.layout = dbc.Container([
                         ], width=4)
                     ], className="mb-3"),
                     html.Div(id="all-metrics-table"),
-                    dbc.Pagination(id="metrics-pagination", active_page=1, max_value=1, first_last=True, previous_next=True)
+                    dbc.Pagination(
+                        id="metrics-pagination",
+                        active_page=1,
+                        max_value=1,
+                        first_last=True,
+                        previous_next=True,
+                        max_visible=7
+                    )
                 ])
             ])
         ])

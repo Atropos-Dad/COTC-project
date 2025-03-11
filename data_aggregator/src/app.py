@@ -188,7 +188,6 @@ def handle_game_metrics(data):
                         # Retry if it's a foreign key violation and we haven't exceeded max retries
                         logger.warning(f"[RETRY] Foreign key violation, retrying ({retries+1}/{max_retries})")
                         retries += 1
-                        time.sleep(0.5)  # Wait briefly before retrying
                         continue
                     logger.error(f"Error processing chess game metric from {client_id}: {result['error']}")
                     emit('error', result)
@@ -202,7 +201,6 @@ def handle_game_metrics(data):
                     # Retry on foreign key violation
                     logger.warning(f"[RETRY] Exception (foreign key violation), retrying ({retries+1}/{max_retries})")
                     retries += 1
-                    time.sleep(0.5)  # Wait briefly before retrying
                 else:
                     # Re-raise if not a foreign key violation or max retries exceeded
                     raise

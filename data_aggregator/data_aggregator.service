@@ -3,15 +3,18 @@ Description=uWSGI service for Data Aggregator
 After=network.target
 
 [Service]
-User=www-data
-Group=www-data
+User=ubuntu
+Group=ubuntu
 WorkingDirectory=/home/ubuntu/COTC-project/data_aggregator
 ExecStart=/home/ubuntu/COTC-project/data_aggregator/.venv/bin/uwsgi --ini uwsgi.ini
+Environment="PATH=/home/ubuntu/COTC-project/data_aggregator/.venv/bin"
+Environment="PYTHONPATH=/home/ubuntu/COTC-project"
 Restart=always
 KillSignal=SIGQUIT
 Type=notify
 NotifyAccess=all
 StandardError=syslog
+StandardOutput=journal
 
 [Install]
 WantedBy=multi-user.target 

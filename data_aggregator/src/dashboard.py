@@ -380,11 +380,12 @@ dash_app.layout = dbc.Container([
                     dbc.Pagination(
                         id="metrics-pagination",
                         active_page=1,
-                        max_value=6,
+                        max_value=1,
                         first_last=True,
                         previous_next=True,
-                        style={'justify-content': 'center'},  # Center the pagination
-                        size="md"  # Medium size for better visibility
+                        fully_expanded=False,
+                        style={'justify-content': 'center'},
+                        size="md"
                     )
                 ])
             ])

@@ -94,11 +94,14 @@ dash_app.layout = dbc.Container([
     # Store for debug info
     dcc.Store(id="debug-fen", data=DEFAULT_FEN),
     
-    # Multiple intervals with different update frequencies
-    dcc.Interval(id="critical-interval", interval=1000),  # 1 second for critical/chess updates
-    dcc.Interval(id="standard-interval", interval=15000),  # 15 seconds for standard updates
-    dcc.Interval(id="slow-interval", interval=30000),      # 30 seconds for slow-changing data
-    dcc.Interval(id="graph-interval", interval=60000),     # 60 seconds for graphs
+    # Invisible intervals for triggering callbacks
+    html.Div([
+        dcc.Interval(id="critical-interval", interval=15000),  # Changed to 15 seconds
+        dcc.Interval(id="standard-interval", interval=15000),  # 15 seconds for standard updates
+        dcc.Interval(id="slow-interval", interval=15000),      # Changed to 15 seconds
+        dcc.Interval(id="graph-interval", interval=15000),     # Changed to 15 seconds
+        # Store intermediate data
+    ]),
     
     # Dashboard header
     dbc.Row([

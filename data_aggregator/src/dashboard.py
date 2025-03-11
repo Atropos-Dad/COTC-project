@@ -472,27 +472,35 @@ def update_event_graphs(n):
         # Get data for ingestion rate (last 5 minutes)
         five_min_ago = datetime.now() - timedelta(minutes=5)
         
-        # Group by minute and count events
+        # Group by 15-second intervals and count events
         event_counts = session.query(
-            func.to_char(func.date_trunc('minute', RawData.received_timestamp), 'YYYY-MM-DD HH24:MI').label('minute'),
+            func.to_char(func.date_trunc('second', RawData.received_timestamp), 'YYYY-MM-DD HH24:MI:SS').label('time_group'),
             func.count(RawData.id).label('count')
         ).filter(RawData.received_timestamp > five_min_ago) \
-         .group_by('minute') \
-         .order_by('minute') \
+         .group_by('time_group') \
+         .order_by('time_group') \
          .all()
         
         ingestion_fig = go.Figure()
         
         if event_counts:
             # Convert to dataframe
-            df = pd.DataFrame([(datetime.strptime(ec.minute, '%Y-%m-%d %H:%M'), ec.count) 
+            df = pd.DataFrame([(datetime.strptime(ec.time_group, '%Y-%m-%d %H:%M:%S'), ec.count) 
                               for ec in event_counts], 
                               columns=['time', 'count'])
             
+            # Group into 15-second bins
+            df['time_rounded'] = df['time'].apply(
+                lambda x: x.replace(second=(x.second // 15) * 15, microsecond=0)
+            )
+            
+            # Aggregate by 15-second intervals
+            df = df.groupby('time_rounded').sum().reset_index()
+            
             # Create the figure
-            ingestion_fig = px.bar(df, x='time', y='count',
-                            title='Event Ingestion Rate (per minute)',
-                            labels={'count': 'Events', 'time': 'Time'})
+            ingestion_fig = px.bar(df, x='time_rounded', y='count',
+                            title='Event Ingestion Rate (15-second intervals)',
+                            labels={'count': 'Events', 'time_rounded': 'Time'})
             
             ingestion_fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
         else:
@@ -836,30 +844,44 @@ def update_system_metrics_combined(n):
     try:
         # Query data for the CPU usage graph
         cpu_metrics = session.query(
-            func.to_char(func.date_trunc('minute', Metric.timestamp), 'YYYY-MM-DD HH24:MI:00').label('minute'),
+            func.to_char(func.date_trunc('second', Metric.timestamp), 'YYYY-MM-DD HH24:MI:SS').label('time_group'),
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'cpu_percent') \
           .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=5))) \
-          .group_by(func.date_trunc('minute', Metric.timestamp)) \
-          .order_by(func.date_trunc('minute', Metric.timestamp)) \
+          .group_by(func.date_trunc('second', Metric.timestamp)) \
+          .order_by(func.date_trunc('second', Metric.timestamp)) \
           .all()
         
         # Extract data for plotting
-        cpu_times = [datetime.strptime(m.minute, '%Y-%m-%d %H:%M:00') for m in cpu_metrics]
+        cpu_times_raw = [datetime.strptime(m.time_group, '%Y-%m-%d %H:%M:%S') for m in cpu_metrics]
         cpu_values = [m.avg_value for m in cpu_metrics]
+        
+        # Group into 15-second intervals
+        cpu_data = pd.DataFrame({
+            'time': cpu_times_raw,
+            'value': cpu_values
+        })
+        
+        # Round to 15-second intervals
+        cpu_data['time_rounded'] = cpu_data['time'].apply(
+            lambda x: x.replace(second=(x.second // 15) * 15, microsecond=0)
+        )
+        
+        # Aggregate the values
+        cpu_data = cpu_data.groupby('time_rounded').mean().reset_index()
         
         # Create CPU figure
         cpu_fig = go.Figure()
         cpu_fig.add_trace(go.Scatter(
-            x=cpu_times, 
-            y=cpu_values,
+            x=cpu_data['time_rounded'], 
+            y=cpu_data['value'],
             mode='lines+markers',
             name='CPU Usage',
             line=dict(color='red')
         ))
         cpu_fig.update_layout(
-            title='CPU Usage (5 min)',
+            title='CPU Usage (15-second intervals)',
             xaxis_title='Time',
             yaxis_title='CPU %',
             margin=dict(l=20, r=20, t=40, b=20),
@@ -868,30 +890,44 @@ def update_system_metrics_combined(n):
         
         # Query data for Memory usage graph
         memory_metrics = session.query(
-            func.to_char(func.date_trunc('minute', Metric.timestamp), 'YYYY-MM-DD HH24:MI:00').label('minute'),
+            func.to_char(func.date_trunc('second', Metric.timestamp), 'YYYY-MM-DD HH24:MI:SS').label('time_group'),
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'memory_percent') \
           .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=5))) \
-          .group_by(func.date_trunc('minute', Metric.timestamp)) \
-          .order_by(func.date_trunc('minute', Metric.timestamp)) \
+          .group_by(func.date_trunc('second', Metric.timestamp)) \
+          .order_by(func.date_trunc('second', Metric.timestamp)) \
           .all()
         
         # Extract data for plotting
-        memory_times = [datetime.strptime(m.minute, '%Y-%m-%d %H:%M:00') for m in memory_metrics]
+        memory_times_raw = [datetime.strptime(m.time_group, '%Y-%m-%d %H:%M:%S') for m in memory_metrics]
         memory_values = [m.avg_value for m in memory_metrics]
+        
+        # Group into 15-second intervals
+        memory_data = pd.DataFrame({
+            'time': memory_times_raw,
+            'value': memory_values
+        })
+        
+        # Round to 15-second intervals
+        memory_data['time_rounded'] = memory_data['time'].apply(
+            lambda x: x.replace(second=(x.second // 15) * 15, microsecond=0)
+        )
+        
+        # Aggregate the values
+        memory_data = memory_data.groupby('time_rounded').mean().reset_index()
         
         # Create Memory figure
         memory_fig = go.Figure()
         memory_fig.add_trace(go.Scatter(
-            x=memory_times, 
-            y=memory_values,
+            x=memory_data['time_rounded'], 
+            y=memory_data['value'],
             mode='lines+markers',
             name='Memory Usage',
             line=dict(color='blue')
         ))
         memory_fig.update_layout(
-            title='Memory Usage (5 min)',
+            title='Memory Usage (15-second intervals)',
             xaxis_title='Time',
             yaxis_title='Memory %',
             margin=dict(l=20, r=20, t=40, b=20),
@@ -900,30 +936,44 @@ def update_system_metrics_combined(n):
         
         # Query data for Processes graph
         processes_metrics = session.query(
-            func.to_char(func.date_trunc('minute', Metric.timestamp), 'YYYY-MM-DD HH24:MI:00').label('minute'),
+            func.to_char(func.date_trunc('second', Metric.timestamp), 'YYYY-MM-DD HH24:MI:SS').label('time_group'),
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'process_count') \
           .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=5))) \
-          .group_by(func.date_trunc('minute', Metric.timestamp)) \
-          .order_by(func.date_trunc('minute', Metric.timestamp)) \
+          .group_by(func.date_trunc('second', Metric.timestamp)) \
+          .order_by(func.date_trunc('second', Metric.timestamp)) \
           .all()
         
         # Extract data for plotting
-        processes_times = [datetime.strptime(m.minute, '%Y-%m-%d %H:%M:00') for m in processes_metrics]
+        processes_times_raw = [datetime.strptime(m.time_group, '%Y-%m-%d %H:%M:%S') for m in processes_metrics]
         processes_values = [m.avg_value for m in processes_metrics]
+        
+        # Group into 15-second intervals
+        processes_data = pd.DataFrame({
+            'time': processes_times_raw,
+            'value': processes_values
+        })
+        
+        # Round to 15-second intervals
+        processes_data['time_rounded'] = processes_data['time'].apply(
+            lambda x: x.replace(second=(x.second // 15) * 15, microsecond=0)
+        )
+        
+        # Aggregate the values
+        processes_data = processes_data.groupby('time_rounded').mean().reset_index()
         
         # Create Processes figure
         processes_fig = go.Figure()
         processes_fig.add_trace(go.Scatter(
-            x=processes_times, 
-            y=processes_values,
+            x=processes_data['time_rounded'], 
+            y=processes_data['value'],
             mode='lines+markers',
             name='Process Count',
             line=dict(color='purple')
         ))
         processes_fig.update_layout(
-            title='Process Count (5 min)',
+            title='Process Count (15-second intervals)',
             xaxis_title='Time',
             yaxis_title='Number of Processes',
             margin=dict(l=20, r=20, t=40, b=20),
@@ -1461,11 +1511,11 @@ def get_system_metrics():
         latest_white_pieces = session.query(func.avg(Move.white_piece_count)) \
             .filter(Move.timestamp > (datetime.now() - timedelta(seconds=15))) \
             .scalar()
-            
+        
         latest_black_pieces = session.query(func.avg(Move.black_piece_count)) \
             .filter(Move.timestamp > (datetime.now() - timedelta(seconds=15))) \
             .scalar()
-            
+        
         return latest_cpu, latest_memory, latest_processes, latest_white_pieces, latest_black_pieces
     finally:
         session.close()
@@ -1520,14 +1570,24 @@ def update_combined_metrics(n):
         
         df = pd.DataFrame(data) if data else pd.DataFrame(columns=['timestamp', 'metric_type', 'value'])
         
+        # Group the data into 15-second intervals
+        if not df.empty:
+            # Round timestamp to 15-second intervals
+            df['timestamp_rounded'] = df['timestamp'].apply(
+                lambda x: x.replace(second=(x.second // 15) * 15, microsecond=0)
+            )
+            
+            # Group by rounded timestamp and metric type, then calculate mean
+            df = df.groupby(['timestamp_rounded', 'metric_type'])['value'].mean().reset_index()
+        
         # Create combined metrics figure
         combined_fig = go.Figure()
         
         # Add CPU percent trace
-        cpu_df = df[df['metric_type'] == 'cpu_percent']
+        cpu_df = df[df['metric_type'] == 'cpu_percent'] if not df.empty else pd.DataFrame()
         if not cpu_df.empty:
             combined_fig.add_trace(go.Scatter(
-                x=cpu_df['timestamp'],
+                x=cpu_df['timestamp_rounded'],
                 y=cpu_df['value'],
                 mode='lines',
                 name='CPU',
@@ -1535,10 +1595,10 @@ def update_combined_metrics(n):
             ))
         
         # Add memory percent trace
-        memory_df = df[df['metric_type'] == 'memory_percent']
+        memory_df = df[df['metric_type'] == 'memory_percent'] if not df.empty else pd.DataFrame()
         if not memory_df.empty:
             combined_fig.add_trace(go.Scatter(
-                x=memory_df['timestamp'],
+                x=memory_df['timestamp_rounded'],
                 y=memory_df['value'],
                 mode='lines',
                 name='Memory',
@@ -1546,32 +1606,41 @@ def update_combined_metrics(n):
             ))
         
         # Add process count with secondary y-axis
-        process_df = df[df['metric_type'] == 'process_count']
+        process_df = df[df['metric_type'] == 'process_count'] if not df.empty else pd.DataFrame()
         if not process_df.empty:
             combined_fig.add_trace(go.Scatter(
-                x=process_df['timestamp'],
+                x=process_df['timestamp_rounded'],
                 y=process_df['value'],
                 mode='lines',
                 name='Processes',
                 line=dict(color='purple'),
                 yaxis='y2'
             ))
+            
+            # Add secondary y-axis for process count
+            combined_fig.update_layout(
+                yaxis2=dict(
+                    title='Process Count',
+                    titlefont=dict(color='purple'),
+                    tickfont=dict(color='purple'),
+                    overlaying='y',
+                    side='right'
+                )
+            )
         
-        # Update layout
+        # Update layout of the combined figure
         combined_fig.update_layout(
-            title="Combined System Metrics (5 min)",
-            xaxis_title="Time",
-            yaxis=dict(
-                title="Percentage (%)",
-                range=[0, 100]
-            ),
-            yaxis2=dict(
-                title="Process Count",
-                overlaying='y',
-                side='right'
-            ),
-            legend=dict(orientation="h", y=1.1),
-            margin=dict(l=20, r=40, t=40, b=20)
+            title='System Metrics (15-second intervals)',
+            xaxis_title='Time',
+            yaxis_title='Usage %',
+            margin=dict(l=20, r=20, t=40, b=20),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
         )
         
         return combined_fig

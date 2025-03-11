@@ -178,18 +178,38 @@ def handle_game_metrics(data):
             data['measurement'] = 'chess_game'
         
         # Use save_chess_data for chess game metrics
-        result = save_chess_data(data)
-        
-        if 'error' in result:
-            logger.error(f"Error processing chess game metric from {request.sid}: {result['error']}")
-            emit('error', result)
-        else:
-            logger.info(f"Successfully processed chess game metric from {request.sid}")
-            emit('success', result)
+        max_retries = 2
+        retries = 0
+        while retries <= max_retries:
+            try:
+                result = save_chess_data(data)
+                if 'error' in result:
+                    if "foreign key constraint" in result.get('error', '').lower() and retries < max_retries:
+                        # Retry if it's a foreign key violation and we haven't exceeded max retries
+                        logger.warning(f"[RETRY] Foreign key violation, retrying ({retries+1}/{max_retries})")
+                        retries += 1
+                        time.sleep(0.5)  # Wait briefly before retrying
+                        continue
+                    logger.error(f"Error processing chess game metric from {client_id}: {result['error']}")
+                    emit('error', result)
+                else:
+                    logger.info(f"Successfully processed chess game metric from {client_id}")
+                    emit('success', result)
+                break  # Exit the loop if successful or if error is not retryable
+            except Exception as inner_e:
+                inner_error_msg = str(inner_e)
+                if "foreign key constraint" in inner_error_msg.lower() and retries < max_retries:
+                    # Retry on foreign key violation
+                    logger.warning(f"[RETRY] Exception (foreign key violation), retrying ({retries+1}/{max_retries})")
+                    retries += 1
+                    time.sleep(0.5)  # Wait briefly before retrying
+                else:
+                    # Re-raise if not a foreign key violation or max retries exceeded
+                    raise
             
     except Exception as e:
         error_msg = str(e)
-        logger.exception(f"Exception in handle_game_metrics: {error_msg}")
+        logger.exception(f"Error processing chess game metric from {client_id}: {error_msg}")
         emit('error', {'error': error_msg})
 
 if __name__ == '__main__':

@@ -454,6 +454,22 @@ def save_chess_data(data):
                 logger.debug(f"[DB_MOVE_DETAILS] Last move: {last_move} | FEN: {fen_position}")
                 logger.debug(f"[DB_MOVE_CLOCK] White time: {white_time} | Black time: {black_time}")
                 
+                # Check if the game exists before inserting a move
+                game_exists = session.query(Game).filter_by(game_id=game_id).first() is not None
+                if not game_exists:
+                    logger.warning(f"[DB_MISSING_GAME] Attempted to record move for non-existent game {game_id}")
+                    if event_type != 'new_game':
+                        # Create a placeholder game record if it doesn't exist
+                        logger.info(f"[DB_GAME_CREATE_PLACEHOLDER] Creating placeholder game record for {game_id}")
+                        placeholder_game = Game(
+                            game_id=game_id,
+                            start_time=datetime.now()
+                        )
+                        session.add(placeholder_game)
+                        # Need to flush to get the game into the database before adding moves
+                        session.flush()
+                        logger.info(f"[DB_GAME_PLACEHOLDER_CREATED] Created placeholder game with ID {game_id}")
+                
                 move = Move(
                     game_id=game_id,
                     last_move=last_move,

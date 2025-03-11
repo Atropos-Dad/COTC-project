@@ -207,9 +207,9 @@ dash_app.layout = dbc.Container([
         ], width=4),
         dbc.Col([
             dbc.Card([
-                dbc.CardHeader("Network Traffic", className="text-center"),
+                dbc.CardHeader("Processes", className="text-center"),
                 dbc.CardBody([
-                    dcc.Graph(id="network-traffic-graph", style={"height": "300px"})
+                    dcc.Graph(id="processes-graph", style={"height": "300px"})
                 ])
             ])
         ], width=4)
@@ -458,7 +458,7 @@ def update_event_graphs(n):
     try:
         # --- Ingestion Rate Graph ---
         # Get data for ingestion rate (last hour)
-        one_hour_ago = datetime.now() - timedelta(hours=1)
+        one_hour_ago = datetime.now() - timedelta(minutes=1)
         
         # Group by minute and count events
         event_counts = session.query(
@@ -792,7 +792,7 @@ def update_chess_board(selected_game_id, n):
      Output("current-processes", "children"),
      Output("cpu-usage-graph", "figure"),
      Output("memory-usage-graph", "figure"),
-     Output("network-traffic-graph", "figure")],
+     Output("processes-graph", "figure")],
     [Input("standard-interval", "n_intervals")],
     prevent_initial_call=True
 )
@@ -828,7 +828,7 @@ def update_system_metrics_combined(n):
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'cpu_percent') \
-          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=1))) \
           .group_by(func.date_trunc('minute', Metric.timestamp)) \
           .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
@@ -847,20 +847,20 @@ def update_system_metrics_combined(n):
             line=dict(color='red')
         ))
         cpu_fig.update_layout(
-            title='CPU Usage (30 min)',
+            title='CPU Usage (1 min)',
             xaxis_title='Time',
             yaxis_title='CPU %',
             margin=dict(l=20, r=20, t=40, b=20),
             height=250
         )
         
-        # Query data for the Memory usage graph
+        # Query data for Memory usage graph
         memory_metrics = session.query(
             func.to_char(func.date_trunc('minute', Metric.timestamp), 'YYYY-MM-DD HH24:MI:00').label('minute'),
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'memory_percent') \
-          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=1))) \
           .group_by(func.date_trunc('minute', Metric.timestamp)) \
           .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
@@ -879,66 +879,46 @@ def update_system_metrics_combined(n):
             line=dict(color='blue')
         ))
         memory_fig.update_layout(
-            title='Memory Usage (30 min)',
+            title='Memory Usage (1 min)',
             xaxis_title='Time',
             yaxis_title='Memory %',
             margin=dict(l=20, r=20, t=40, b=20),
             height=250
         )
         
-        # Query data for Network traffic graph
-        network_in_metrics = session.query(
+        # Query data for Processes graph
+        processes_metrics = session.query(
             func.to_char(func.date_trunc('minute', Metric.timestamp), 'YYYY-MM-DD HH24:MI:00').label('minute'),
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
-          .filter(MetricType.name == 'network_in_bytes') \
-          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
-          .group_by(func.date_trunc('minute', Metric.timestamp)) \
-          .order_by(func.date_trunc('minute', Metric.timestamp)) \
-          .all()
-        
-        network_out_metrics = session.query(
-            func.to_char(func.date_trunc('minute', Metric.timestamp), 'YYYY-MM-DD HH24:MI:00').label('minute'),
-            func.avg(Metric.value).label('avg_value')
-        ).join(MetricType, Metric.metric_type_id == MetricType.id) \
-          .filter(MetricType.name == 'network_out_bytes') \
-          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
+          .filter(MetricType.name == 'process_count') \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=1))) \
           .group_by(func.date_trunc('minute', Metric.timestamp)) \
           .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
         
         # Extract data for plotting
-        network_in_times = [datetime.strptime(m.minute, '%Y-%m-%d %H:%M:00') for m in network_in_metrics]
-        network_in_values = [m.avg_value / 1024 for m in network_in_metrics]  # Convert to KB
+        processes_times = [datetime.strptime(m.minute, '%Y-%m-%d %H:%M:00') for m in processes_metrics]
+        processes_values = [m.avg_value for m in processes_metrics]
         
-        network_out_times = [datetime.strptime(m.minute, '%Y-%m-%d %H:%M:00') for m in network_out_metrics]
-        network_out_values = [m.avg_value / 1024 for m in network_out_metrics]  # Convert to KB
-        
-        # Create Network figure
-        network_fig = go.Figure()
-        network_fig.add_trace(go.Scatter(
-            x=network_in_times, 
-            y=network_in_values,
+        # Create Processes figure
+        processes_fig = go.Figure()
+        processes_fig.add_trace(go.Scatter(
+            x=processes_times, 
+            y=processes_values,
             mode='lines+markers',
-            name='Network In (KB)',
-            line=dict(color='green')
+            name='Process Count',
+            line=dict(color='purple')
         ))
-        network_fig.add_trace(go.Scatter(
-            x=network_out_times, 
-            y=network_out_values,
-            mode='lines+markers',
-            name='Network Out (KB)',
-            line=dict(color='orange')
-        ))
-        network_fig.update_layout(
-            title='Network Traffic (30 min)',
+        processes_fig.update_layout(
+            title='Process Count (1 min)',
             xaxis_title='Time',
-            yaxis_title='KB',
+            yaxis_title='Number of Processes',
             margin=dict(l=20, r=20, t=40, b=20),
             height=250
         )
         
-        return cpu_text, memory_text, processes_text, cpu_fig, memory_fig, network_fig
+        return cpu_text, memory_text, processes_text, cpu_fig, memory_fig, processes_fig
     except Exception as e:
         logger.exception(f"Error updating system metrics: {str(e)}")
         empty_fig = go.Figure()
@@ -1169,7 +1149,6 @@ def update_origin_filter(n):
         
         # Format for dropdown
         options = [{"label": origin[0], "value": origin[0]} for origin in origins]
-        return options
     finally:
         session.close()
 
@@ -1195,7 +1174,6 @@ def update_metric_type_filter(n, origin_filter):
         
         # Format for dropdown
         options = [{"label": metric_type[0], "value": metric_type[0]} for metric_type in metric_types]
-        return options
     except Exception as e:
         logger.error(f"Error updating metric type filter: {str(e)}")
         return []
@@ -1218,7 +1196,7 @@ def update_metric_type_filter(n, origin_filter):
 def reset_filters(n_clicks):
     """Reset all metric filters to default values."""
     # Reset all filters and go back to page 1
-    return None, None, 1, None, None, None, None, None, None
+    return None, None, 1, None, None, None, None
 
 # Callback to reset pagination when Apply Filters is clicked
 @callback(
@@ -1244,7 +1222,7 @@ def get_active_games():
     """Get list of active games with recent moves."""
     session = Session()
     try:
-        ten_min_ago = datetime.now() - timedelta(minutes=10)
+        one_min_ago = datetime.now() - timedelta(minutes=1)
         
         # Get game_id and player info for games with recent moves
         active_games = session.query(
@@ -1253,7 +1231,7 @@ def get_active_games():
             Game.black_player_id,
             func.max(Move.timestamp).label('last_move_time')
         ).join(Move, Game.game_id == Move.game_id) \
-         .filter(Move.timestamp > ten_min_ago) \
+         .filter(Move.timestamp > one_min_ago) \
          .group_by(Game.game_id, Game.white_player_id, Game.black_player_id) \
          .order_by(desc('last_move_time')) \
          .all()
@@ -1294,11 +1272,11 @@ def get_games_count():
         # Total games count
         total_games = session.query(func.count(Game.id)).scalar()
         
-        # Active games (with moves in last 10 minutes)
-        ten_min_ago = datetime.now() - timedelta(minutes=10)
+        # Active games (with moves in last 1 minute)
+        one_min_ago = datetime.now() - timedelta(minutes=1)
         active_games_count = session.query(
             func.count(func.distinct(Move.game_id))
-        ).filter(Move.timestamp > ten_min_ago).scalar()
+        ).filter(Move.timestamp > one_min_ago).scalar()
         
         return total_games, active_games_count
     finally:
@@ -1449,11 +1427,11 @@ def get_system_metrics():
             
         # Get chess pieces stats
         latest_white_pieces = session.query(func.avg(Move.white_piece_count)) \
-            .filter(Move.timestamp > (datetime.now() - timedelta(minutes=10))) \
+            .filter(Move.timestamp > (datetime.now() - timedelta(minutes=1))) \
             .scalar()
             
         latest_black_pieces = session.query(func.avg(Move.black_piece_count)) \
-            .filter(Move.timestamp > (datetime.now() - timedelta(minutes=10))) \
+            .filter(Move.timestamp > (datetime.now() - timedelta(minutes=1))) \
             .scalar()
             
         return latest_cpu, latest_memory, latest_processes, latest_white_pieces, latest_black_pieces
@@ -1486,7 +1464,7 @@ def update_combined_metrics(n):
     session = Session()
     try:
         # Get data for the last hour
-        one_hour_ago = datetime.now() - timedelta(hours=1)
+        one_hour_ago = datetime.now() - timedelta(minutes=1)
         
         # --- Combined Metrics Graph ---
         # Query for CPU, memory, and process count metrics
@@ -1543,13 +1521,13 @@ def update_combined_metrics(n):
                 y=process_df['value'],
                 mode='lines',
                 name='Processes',
-                line=dict(color='green'),
+                line=dict(color='purple'),
                 yaxis='y2'
             ))
         
         # Update layout
         combined_fig.update_layout(
-            title="Combined System Metrics",
+            title="Combined System Metrics (1 min)",
             xaxis_title="Time",
             yaxis=dict(
                 title="Percentage (%)",

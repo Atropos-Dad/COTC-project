@@ -617,8 +617,13 @@ def update_game_selector(n):
         white_name = game['white_player_name']
         black_name = game['black_player_name']
         
+        # Convert last_move_time to naive datetime if it's timezone-aware
+        last_move_time = game['last_move_time']
+        if hasattr(last_move_time, 'tzinfo') and last_move_time.tzinfo is not None:
+            last_move_time = last_move_time.replace(tzinfo=None)
+        
         # Format the time difference
-        time_diff = datetime.now() - game['last_move_time']
+        time_diff = datetime.now() - last_move_time
         if time_diff.seconds < 60:
             time_str = f"{time_diff.seconds}s ago"
         else:

@@ -10,17 +10,48 @@ import logging
 
 from models import Base, Game, Move, RawData, Metric, MetricOrigin, MetricType, TimeZoneSource, Player
 from chess_utils import derive_fen_from_moves, is_valid_fen, DEFAULT_FEN
+from lib_config.config import Config
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# Database configuration
-DB_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
-os.makedirs(DB_DIR, exist_ok=True)
-DB_PATH = os.path.join(DB_DIR, 'chess_data.db')
+# Get the project root directory
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+config_path = os.path.join(project_root, "config.json")
+
+# Initialize configuration
+config = Config(config_path=config_path)
+
+# Create engine and session based on configuration
+def create_db_url():
+    """Create database URL from configuration."""
+    db_config = config.database
+    if db_config.type == "postgresql":
+        return f"postgresql://{db_config.user}:{db_config.password}@{db_config.host}:{db_config.port}/{db_config.name}"
+    else:
+        # Fallback to SQLite for development/testing
+        DB_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+        os.makedirs(DB_DIR, exist_ok=True)
+        DB_PATH = os.path.join(DB_DIR, 'chess_data.db')
+        return f'sqlite:///{DB_PATH}'
+
+# Create engine with appropriate configuration
+def create_db_engine():
+    """Create database engine with proper configuration."""
+    db_url = create_db_url()
+    if config.database.type == "postgresql":
+        return create_engine(
+            db_url,
+            pool_size=config.database.pool_size,
+            max_overflow=config.database.max_overflow,
+            pool_timeout=config.database.pool_timeout,
+            pool_pre_ping=True  # Enable connection health checks
+        )
+    else:
+        return create_engine(db_url)
 
 # Create engine and session
-engine = create_engine(f'sqlite:///{DB_PATH}')
+engine = create_db_engine()
 SessionFactory = sessionmaker(bind=engine)
 Session = scoped_session(SessionFactory)
 

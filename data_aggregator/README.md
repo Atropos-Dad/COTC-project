@@ -4,7 +4,33 @@ A data aggregation service that collects and stores chess game data.
 
 ## Overview
 
-This application provides endpoints for collecting chess game data and stores it in a SQLite database using SQLAlchemy ORM. The application supports both HTTP and WebSocket connections for receiving data.
+This application provides endpoints for collecting chess game data and stores it in a PostgreSQL or SQLite database using SQLAlchemy ORM. The application supports both HTTP and WebSocket connections for receiving data.
+
+## Database Configuration
+
+The application supports two database backends:
+
+1. **PostgreSQL** (Recommended for production)
+   - Configure PostgreSQL settings in `config.json`:
+   ```json
+   {
+     "database": {
+       "type": "postgresql",
+       "host": "localhost",
+       "port": 5432,
+       "name": "chess_data",
+       "user": "postgres",
+       "password": "postgres",
+       "pool_size": 10,
+       "max_overflow": 20,
+       "pool_timeout": 30
+     }
+   }
+   ```
+
+2. **SQLite** (Default for development)
+   - Used automatically if PostgreSQL is not configured
+   - Data stored in `data/chess_data.db`
 
 ## Database Schema
 

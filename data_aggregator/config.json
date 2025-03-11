@@ -23,5 +23,16 @@
   },
   "dashboard": {
     "update_interval_seconds": 5.0
+  },
+  "database": {
+    "type": "postgresql",
+    "host": "localhost",
+    "port": 5432,
+    "name": "chess_data",
+    "user": "postgres",
+    "password": "postgres",
+    "pool_size": 10,
+    "max_overflow": 20,
+    "pool_timeout": 30
   }
 }

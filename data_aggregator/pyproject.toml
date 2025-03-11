@@ -22,6 +22,7 @@ dependencies = [
     "colorlog>=6.9.0",
     "flask-caching>=2.3.1",
     "psutils>=3.3.9",
+    "psycopg2-binary>=2.9.9",
 ]
 
 [tool.poetry.dependencies]
@@ -37,3 +38,4 @@ dash-core-components = "^2.0.0"
 dash-html-components = "^2.0.0"
 dash-bootstrap-components = "^1.5.0"
 plotly = "^5.18.0"
+psycopg2-binary = "^2.9.9"

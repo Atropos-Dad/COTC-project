@@ -1,0 +1,17 @@
+[Unit]
+Description=uWSGI service for Data Aggregator
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/path/to/data_aggregator
+ExecStart=/path/to/data_aggregator/.venv/bin/uwsgi --ini uwsgi.ini
+Restart=always
+KillSignal=SIGQUIT
+Type=notify
+NotifyAccess=all
+StandardError=syslog
+
+[Install]
+WantedBy=multi-user.target 

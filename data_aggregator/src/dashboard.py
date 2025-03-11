@@ -460,14 +460,14 @@ def update_event_graphs(n):
     session = Session()
     try:
         # --- Ingestion Rate Graph ---
-        # Get data for ingestion rate (last hour)
-        one_hour_ago = datetime.now() - timedelta(seconds=15)
+        # Get data for ingestion rate (last 5 minutes)
+        five_min_ago = datetime.now() - timedelta(minutes=5)
         
         # Group by minute and count events
         event_counts = session.query(
             func.to_char(func.date_trunc('minute', RawData.received_timestamp), 'YYYY-MM-DD HH24:MI').label('minute'),
             func.count(RawData.id).label('count')
-        ).filter(RawData.received_timestamp > one_hour_ago) \
+        ).filter(RawData.received_timestamp > five_min_ago) \
          .group_by('minute') \
          .order_by('minute') \
          .all()
@@ -493,11 +493,11 @@ def update_event_graphs(n):
             ingestion_fig.update_layout(title='Event Ingestion Rate')
         
         # --- Events Distribution Graph ---
-        # Get distribution of event types (last hour)
+        # Get distribution of event types (last 5 minutes)
         event_types = session.query(
             RawData.measurement,
             func.count(RawData.id).label('count')
-        ).filter(RawData.received_timestamp > one_hour_ago) \
+        ).filter(RawData.received_timestamp > five_min_ago) \
          .filter(RawData.measurement.isnot(None)) \
          .group_by(RawData.measurement) \
          .order_by(desc('count')) \
@@ -825,13 +825,13 @@ def update_system_metrics_combined(n):
     # Generate CPU usage graph
     session = Session()
     try:
-        # Query data for the CPU usage graph - use PostgreSQL compatible functions
+        # Query data for the CPU usage graph
         cpu_metrics = session.query(
             func.to_char(func.date_trunc('minute', Metric.timestamp), 'YYYY-MM-DD HH24:MI:00').label('minute'),
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'cpu_percent') \
-          .filter(Metric.timestamp > (datetime.now() - timedelta(seconds=15))) \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=5))) \
           .group_by(func.date_trunc('minute', Metric.timestamp)) \
           .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
@@ -850,7 +850,7 @@ def update_system_metrics_combined(n):
             line=dict(color='red')
         ))
         cpu_fig.update_layout(
-            title='CPU Usage (15 sec)',
+            title='CPU Usage (5 min)',
             xaxis_title='Time',
             yaxis_title='CPU %',
             margin=dict(l=20, r=20, t=40, b=20),
@@ -863,7 +863,7 @@ def update_system_metrics_combined(n):
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'memory_percent') \
-          .filter(Metric.timestamp > (datetime.now() - timedelta(seconds=15))) \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=5))) \
           .group_by(func.date_trunc('minute', Metric.timestamp)) \
           .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
@@ -882,7 +882,7 @@ def update_system_metrics_combined(n):
             line=dict(color='blue')
         ))
         memory_fig.update_layout(
-            title='Memory Usage (15 sec)',
+            title='Memory Usage (5 min)',
             xaxis_title='Time',
             yaxis_title='Memory %',
             margin=dict(l=20, r=20, t=40, b=20),
@@ -895,7 +895,7 @@ def update_system_metrics_combined(n):
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'process_count') \
-          .filter(Metric.timestamp > (datetime.now() - timedelta(seconds=15))) \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=5))) \
           .group_by(func.date_trunc('minute', Metric.timestamp)) \
           .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
@@ -914,7 +914,7 @@ def update_system_metrics_combined(n):
             line=dict(color='purple')
         ))
         processes_fig.update_layout(
-            title='Process Count (15 sec)',
+            title='Process Count (5 min)',
             xaxis_title='Time',
             yaxis_title='Number of Processes',
             margin=dict(l=20, r=20, t=40, b=20),
@@ -1466,8 +1466,8 @@ def update_combined_metrics(n):
     """Callback for less frequently updated system metrics graph."""
     session = Session()
     try:
-        # Get data for the last 15 seconds
-        one_min_ago = datetime.now() - timedelta(seconds=15)
+        # Get data for the last 5 minutes
+        five_min_ago = datetime.now() - timedelta(minutes=5)
         
         # --- Combined Metrics Graph ---
         # Query for CPU, memory, and process count metrics
@@ -1477,7 +1477,7 @@ def update_combined_metrics(n):
             Metric.value
         ).join(MetricType)\
             .filter(MetricType.name.in_(['cpu_percent', 'memory_percent', 'process_count']))\
-            .filter(Metric.timestamp > one_min_ago)\
+            .filter(Metric.timestamp > five_min_ago)\
             .order_by(Metric.timestamp).all()
         
         # Create dataframe
@@ -1530,7 +1530,7 @@ def update_combined_metrics(n):
         
         # Update layout
         combined_fig.update_layout(
-            title="Combined System Metrics (15 sec)",
+            title="Combined System Metrics (5 min)",
             xaxis_title="Time",
             yaxis=dict(
                 title="Percentage (%)",

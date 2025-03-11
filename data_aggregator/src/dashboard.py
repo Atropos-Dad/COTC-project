@@ -461,7 +461,7 @@ def update_event_graphs(n):
     try:
         # --- Ingestion Rate Graph ---
         # Get data for ingestion rate (last hour)
-        one_hour_ago = datetime.now() - timedelta(minutes=1)
+        one_hour_ago = datetime.now() - timedelta(seconds=15)
         
         # Group by minute and count events
         event_counts = session.query(
@@ -831,7 +831,7 @@ def update_system_metrics_combined(n):
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'cpu_percent') \
-          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=1))) \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(seconds=15))) \
           .group_by(func.date_trunc('minute', Metric.timestamp)) \
           .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
@@ -850,7 +850,7 @@ def update_system_metrics_combined(n):
             line=dict(color='red')
         ))
         cpu_fig.update_layout(
-            title='CPU Usage (1 min)',
+            title='CPU Usage (15 sec)',
             xaxis_title='Time',
             yaxis_title='CPU %',
             margin=dict(l=20, r=20, t=40, b=20),
@@ -863,7 +863,7 @@ def update_system_metrics_combined(n):
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'memory_percent') \
-          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=1))) \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(seconds=15))) \
           .group_by(func.date_trunc('minute', Metric.timestamp)) \
           .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
@@ -882,7 +882,7 @@ def update_system_metrics_combined(n):
             line=dict(color='blue')
         ))
         memory_fig.update_layout(
-            title='Memory Usage (1 min)',
+            title='Memory Usage (15 sec)',
             xaxis_title='Time',
             yaxis_title='Memory %',
             margin=dict(l=20, r=20, t=40, b=20),
@@ -895,7 +895,7 @@ def update_system_metrics_combined(n):
             func.avg(Metric.value).label('avg_value')
         ).join(MetricType, Metric.metric_type_id == MetricType.id) \
           .filter(MetricType.name == 'process_count') \
-          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=1))) \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(seconds=15))) \
           .group_by(func.date_trunc('minute', Metric.timestamp)) \
           .order_by(func.date_trunc('minute', Metric.timestamp)) \
           .all()
@@ -914,7 +914,7 @@ def update_system_metrics_combined(n):
             line=dict(color='purple')
         ))
         processes_fig.update_layout(
-            title='Process Count (1 min)',
+            title='Process Count (15 sec)',
             xaxis_title='Time',
             yaxis_title='Number of Processes',
             margin=dict(l=20, r=20, t=40, b=20),
@@ -1225,7 +1225,7 @@ def get_active_games():
     """Get list of active games with recent moves."""
     session = Session()
     try:
-        one_min_ago = datetime.now() - timedelta(minutes=1)
+        one_min_ago = datetime.now() - timedelta(seconds=15)
         
         # Get game_id and player info for games with recent moves
         active_games = session.query(
@@ -1275,8 +1275,8 @@ def get_games_count():
         # Total games count
         total_games = session.query(func.count(Game.id)).scalar()
         
-        # Active games (with moves in last 1 minute)
-        one_min_ago = datetime.now() - timedelta(minutes=1)
+        # Active games (with moves in last 15 seconds)
+        one_min_ago = datetime.now() - timedelta(seconds=15)
         active_games_count = session.query(
             func.count(func.distinct(Move.game_id))
         ).filter(Move.timestamp > one_min_ago).scalar()
@@ -1290,7 +1290,7 @@ def get_events_last_minute():
     """Get count of events in the last minute."""
     session = Session()
     try:
-        one_min_ago = datetime.now() - timedelta(minutes=1)
+        one_min_ago = datetime.now() - timedelta(seconds=15)
         events_last_minute = session.query(func.count(RawData.id)) \
             .filter(RawData.received_timestamp > one_min_ago).scalar()
         return events_last_minute
@@ -1430,11 +1430,11 @@ def get_system_metrics():
             
         # Get chess pieces stats
         latest_white_pieces = session.query(func.avg(Move.white_piece_count)) \
-            .filter(Move.timestamp > (datetime.now() - timedelta(minutes=1))) \
+            .filter(Move.timestamp > (datetime.now() - timedelta(seconds=15))) \
             .scalar()
             
         latest_black_pieces = session.query(func.avg(Move.black_piece_count)) \
-            .filter(Move.timestamp > (datetime.now() - timedelta(minutes=1))) \
+            .filter(Move.timestamp > (datetime.now() - timedelta(seconds=15))) \
             .scalar()
             
         return latest_cpu, latest_memory, latest_processes, latest_white_pieces, latest_black_pieces
@@ -1466,8 +1466,8 @@ def update_combined_metrics(n):
     """Callback for less frequently updated system metrics graph."""
     session = Session()
     try:
-        # Get data for the last hour
-        one_hour_ago = datetime.now() - timedelta(minutes=1)
+        # Get data for the last 15 seconds
+        one_min_ago = datetime.now() - timedelta(seconds=15)
         
         # --- Combined Metrics Graph ---
         # Query for CPU, memory, and process count metrics
@@ -1477,7 +1477,7 @@ def update_combined_metrics(n):
             Metric.value
         ).join(MetricType)\
             .filter(MetricType.name.in_(['cpu_percent', 'memory_percent', 'process_count']))\
-            .filter(Metric.timestamp > one_hour_ago)\
+            .filter(Metric.timestamp > one_min_ago)\
             .order_by(Metric.timestamp).all()
         
         # Create dataframe
@@ -1530,7 +1530,7 @@ def update_combined_metrics(n):
         
         # Update layout
         combined_fig.update_layout(
-            title="Combined System Metrics (1 min)",
+            title="Combined System Metrics (15 sec)",
             xaxis_title="Time",
             yaxis=dict(
                 title="Percentage (%)",

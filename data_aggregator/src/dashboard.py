@@ -1620,8 +1620,10 @@ def update_combined_metrics(n):
             # Add secondary y-axis for process count
             combined_fig.update_layout(
                 yaxis2=dict(
-                    title='Process Count',
-                    titlefont=dict(color='purple'),
+                    title=dict(
+                        text='Process Count',
+                        font=dict(color='purple')
+                    ),
                     tickfont=dict(color='purple'),
                     overlaying='y',
                     side='right'

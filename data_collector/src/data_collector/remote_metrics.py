@@ -29,6 +29,7 @@ class LichessMetricsCollector(MetricsGenerator):
         self._black_player = None
         self._hostname = socket.gethostname()
         self._mode = mode
+        self._last_fen = None
         logger.info(f"Initialized LichessMetricsCollector in {mode} mode")
         
     async def generate_metrics(self) -> AsyncGenerator[dict, None]:
@@ -184,13 +185,16 @@ class LichessMetricsCollector(MetricsGenerator):
     async def _end_game(self, timestamp: datetime) -> Dict[str, Any]:
         """Handle an end game"""
         logger.debug("Processing end game: %s", self._current_game_id)
+        # For end game, include the most recent FEN position if available
+        last_fen = getattr(self, '_last_fen', None)
         metrics = ChessGameMetrics(
             timestamp=timestamp,
             game_id=self._current_game_id,
             white_player=self._white_player,
             black_player=self._black_player,
             game_ended=True,
-            end_reason="game_complete"
+            end_reason="game_complete",
+            fen_position=last_fen
         )
         return metrics.to_timeseries_data()
 
@@ -200,6 +204,9 @@ class LichessMetricsCollector(MetricsGenerator):
         await self._setup_game_state(data)
         
         fen = data.get('fen')
+        # Store the initial FEN position
+        if fen:
+            self._last_fen = fen
         
         # Get piece counts from FEN
         white_pieces, black_pieces = fen_to_piece_count(fen) if fen else (0, 0)
@@ -223,6 +230,10 @@ class LichessMetricsCollector(MetricsGenerator):
         
         # Get piece counts from FEN
         fen = data.get('fen')
+        # Store the last FEN position for later use (e.g., in end_game)
+        if fen:
+            self._last_fen = fen
+            
         white_pieces, black_pieces = fen_to_piece_count(fen) if fen else (0, 0)
         
         metrics = ChessGameMetrics(

@@ -88,13 +88,14 @@ dash_app.layout = dbc.Container([
     # Hidden containers for data - using dcc.Store instead of html.Div for state
     dcc.Store(id="current-fen", data=DEFAULT_FEN),
     dcc.Store(id="game-moves", data=[]),
+    dcc.Store(id="is-loaded", data=False),
     html.Div(id="clientside-script-container", style={"display": "none"}),
     
     # Store for debug info
     dcc.Store(id="debug-fen", data=DEFAULT_FEN),
     
     # Multiple intervals with different update frequencies
-    dcc.Interval(id="critical-interval", interval=5000),  # 5 seconds for critical stats
+    dcc.Interval(id="critical-interval", interval=1000),  # 1 second for critical/chess updates
     dcc.Interval(id="standard-interval", interval=15000),  # 15 seconds for standard updates
     dcc.Interval(id="slow-interval", interval=30000),      # 30 seconds for slow-changing data
     dcc.Interval(id="graph-interval", interval=60000),     # 60 seconds for graphs
@@ -589,9 +590,10 @@ def update_recent_games(n):
 # Callback for game selector dropdown
 @callback(
     Output("game-selector", "options"),
-    [Input("standard-interval", "n_intervals")]
+    [Input("critical-interval", "n_intervals")]
 )
 def update_game_selector(n):
+    # Use the cached query but with more frequent updates
     active_games = get_active_games()
     
     if not active_games:
@@ -663,7 +665,7 @@ clientside_callback(
     """,
     Output('clientside-script-container', 'children'),
     [Input('current-fen', 'data'),
-     Input('standard-interval', 'n_intervals')]
+     Input('critical-interval', 'n_intervals')]
 )
 
 # Callback for updating chess board and related information
@@ -677,7 +679,8 @@ clientside_callback(
      Output("debug-fen", "data"),
      Output("debug-display", "children")],
     [Input("game-selector", "value"),
-     Input("standard-interval", "n_intervals")]
+     Input("critical-interval", "n_intervals")],
+    prevent_initial_call=True
 )
 def update_chess_board(selected_game_id, n):
     debug_info = []  # List to collect debug info
@@ -691,8 +694,8 @@ def update_chess_board(selected_game_id, n):
         debug_info.append(f"No game selected, using DEFAULT_FEN")
         return DEFAULT_FEN, [], "White: Select a game", "Black: Select a game", [], {'display': 'none'}, DEFAULT_FEN, "\n".join(debug_info)
     
-    # Get game data using cached function
-    game, moves = get_game_data(selected_game_id)
+    # Use real-time function without caching for chess board updates
+    game, moves = get_game_data_realtime(selected_game_id)
     
     if not game:
         logger.debug(f"Game {selected_game_id} not found, using DEFAULT_FEN")
@@ -716,24 +719,9 @@ def update_chess_board(selected_game_id, n):
         logger.debug(f"Using stored FEN for game {selected_game_id}: {current_fen}")
         debug_info.append(f"Using stored FEN: {current_fen}")
     else:
-        logger.debug(f"Deriving FEN for game {selected_game_id} from {len(moves)} moves")
-        debug_info.append(f"Stored FEN missing or invalid, deriving from {len(moves)} moves")
-        # Output first few moves for debugging
-        if len(moves) > 0:
-            debug_info.append("Sample moves:")
-            for i, move in enumerate(moves[:5]):
-                debug_info.append(f"  {i}: {move['last_move']}")
-            if len(moves) > 5:
-                debug_info.append(f"  ... and {len(moves)-5} more")
-        
-        try:
-            current_fen = derive_fen_from_moves(moves)
-            logger.debug(f"Derived FEN: {current_fen}")
-            debug_info.append(f"Derived FEN: {current_fen}")
-        except Exception as e:
-            logger.error(f"Error deriving FEN: {str(e)}")
-            debug_info.append(f"ERROR: Could not derive FEN: {str(e)}")
-            current_fen = DEFAULT_FEN
+        logger.warning(f"Missing valid FEN for game {selected_game_id}, using DEFAULT_FEN")
+        debug_info.append(f"Missing valid FEN, using DEFAULT_FEN")
+        current_fen = DEFAULT_FEN
     
     # Format player info
     white_info = f"White: {game['white_player']['name'] if game['white_player']['name'] else 'Unknown'}"
@@ -791,7 +779,8 @@ def update_chess_board(selected_game_id, n):
      Output("cpu-usage-graph", "figure"),
      Output("memory-usage-graph", "figure"),
      Output("network-traffic-graph", "figure")],
-    [Input("standard-interval", "n_intervals")]
+    [Input("standard-interval", "n_intervals")],
+    prevent_initial_call=True
 )
 def update_system_metrics_combined(n):
     """Single callback for all system metrics to reduce HTTP requests."""
@@ -1225,7 +1214,7 @@ def get_dash_app(cache=None):
     return dash_app
 
 # Data retrieval functions that can be cached
-@cached_query(timeout=30)
+@cached_query(timeout=5)  # Reduced from 30 to 5 seconds
 def get_active_games():
     """Get list of active games with recent moves."""
     session = Session()
@@ -1313,7 +1302,7 @@ def get_latest_event():
     finally:
         session.close()
 
-@cached_query(timeout=60)
+@cached_query(timeout=5)  # Reduce timeout from 60 to 5 seconds
 def get_game_data(game_id):
     """Get game and move data for a specific game."""
     if not game_id:
@@ -1362,6 +1351,11 @@ def get_game_data(game_id):
         return game_data, move_data
     finally:
         session.close()
+
+def get_game_data_realtime(game_id):
+    """Get game data without caching for real-time updates."""
+    # This is a direct call to the function without caching
+    return get_game_data.__wrapped__(game_id)
 
 @cached_query(timeout=30)
 def get_recent_games(limit=5):
@@ -1442,12 +1436,11 @@ def get_system_metrics():
         session.close()
 
 @callback(
-    [Output("combined-metrics-graph", "figure"),
-     Output("chess-pieces-graph", "figure")],
+    [Output("combined-metrics-graph", "figure")],
     [Input("slow-interval", "n_intervals")]
 )
-def update_remaining_graphs(n):
-    """Combined callback for less frequently updated graphs."""
+def update_combined_metrics(n):
+    """Callback for less frequently updated system metrics graph."""
     session = Session()
     try:
         # Get data for the last hour
@@ -1529,67 +1522,102 @@ def update_remaining_graphs(n):
             margin=dict(l=20, r=40, t=40, b=20)
         )
         
-        # --- Chess Pieces Graph ---
-        # Get the average piece counts by timestamp
-        piece_counts = session.query(
-            Move.timestamp,
-            func.avg(Move.white_piece_count).label('white_pieces'),
-            func.avg(Move.black_piece_count).label('black_pieces')
-        ).filter(Move.timestamp > one_hour_ago)\
-         .filter(Move.white_piece_count.isnot(None))\
-         .filter(Move.black_piece_count.isnot(None))\
-         .group_by(func.strftime('%Y-%m-%d %H:%M', Move.timestamp))\
-         .order_by(Move.timestamp)\
-         .all()
-        
-        # Create chess pieces figure
+        return [combined_fig]
+    except Exception as e:
+        logger.exception(f"Error updating combined metrics graph: {str(e)}")
+        empty_fig = go.Figure()
+        empty_fig.add_annotation(text="Error loading data", 
+                          xref="paper", yref="paper",
+                          x=0.5, y=0.5, showarrow=False)
+        return [empty_fig]
+    finally:
+        session.close()
+
+@callback(
+    Output("chess-pieces-graph", "figure"),
+    [Input("game-selector", "value"),
+     Input("critical-interval", "n_intervals")],
+    prevent_initial_call=True
+)
+def update_chess_pieces_graph(selected_game_id, n):
+    """Callback to update the chess pieces graph for the current selected game."""
+    if not selected_game_id:
+        # No game selected, show empty graph
         chess_fig = go.Figure()
+        chess_fig.add_annotation(text="No game selected", 
+                         xref="paper", yref="paper",
+                         x=0.5, y=0.5, showarrow=False)
+        chess_fig.update_layout(
+            title="Current Game Piece Counts",
+            xaxis_title="Move Number",
+            yaxis_title="Piece Count",
+            yaxis=dict(range=[0, 16]),
+            margin=dict(l=20, r=20, t=40, b=20)
+        )
+        return chess_fig
+    
+    # Get game data for the selected game
+    _, moves = get_game_data_realtime(selected_game_id)
+    
+    # Create chess pieces figure
+    chess_fig = go.Figure()
+    
+    if moves:
+        # Create lists for move numbers, white piece counts, and black piece counts
+        move_numbers = list(range(1, len(moves) + 1))
+        white_piece_counts = [move.get('white_piece_count', None) for move in moves]
+        black_piece_counts = [move.get('black_piece_count', None) for move in moves]
         
-        if piece_counts:
-            # Convert to DataFrame
-            pieces_df = pd.DataFrame([(p.timestamp, p.white_pieces, p.black_pieces) 
-                                     for p in piece_counts], 
-                                     columns=['timestamp', 'white_pieces', 'black_pieces'])
+        # Filter out None values
+        valid_moves = [(n, w, b) for n, w, b in zip(move_numbers, white_piece_counts, black_piece_counts) 
+                      if w is not None and b is not None]
+        
+        if valid_moves:
+            move_numbers, white_piece_counts, black_piece_counts = zip(*valid_moves)
             
             # Add traces
             chess_fig.add_trace(go.Scatter(
-                x=pieces_df['timestamp'],
-                y=pieces_df['white_pieces'],
-                mode='lines',
+                x=move_numbers,
+                y=white_piece_counts,
+                mode='lines+markers',
                 name='White Pieces',
                 line=dict(color='blue')
             ))
             
             chess_fig.add_trace(go.Scatter(
-                x=pieces_df['timestamp'],
-                y=pieces_df['black_pieces'],
-                mode='lines',
+                x=move_numbers,
+                y=black_piece_counts,
+                mode='lines+markers',
                 name='Black Pieces',
                 line=dict(color='black')
             ))
             
             # Update layout
             chess_fig.update_layout(
-                title="Average Chess Piece Counts",
-                xaxis_title="Time",
+                title="Current Game Piece Counts",
+                xaxis_title="Move Number",
                 yaxis_title="Piece Count",
                 yaxis=dict(range=[0, 16]),
                 legend=dict(orientation="h", y=1.1),
                 margin=dict(l=20, r=20, t=40, b=20)
             )
         else:
-            chess_fig.add_annotation(text="No piece count data available", 
-                             xref="paper", yref="paper",
-                             x=0.5, y=0.5, showarrow=False)
-            chess_fig.update_layout(title="Chess Piece Counts")
-        
-        return combined_fig, chess_fig
-    except Exception as e:
-        logger.exception(f"Error updating remaining graphs: {str(e)}")
-        empty_fig = go.Figure()
-        empty_fig.add_annotation(text="Error loading data", 
-                          xref="paper", yref="paper",
-                          x=0.5, y=0.5, showarrow=False)
-        return empty_fig, empty_fig
-    finally:
-        session.close()
+            chess_fig.add_annotation(text="No piece count data available for this game", 
+                            xref="paper", yref="paper",
+                            x=0.5, y=0.5, showarrow=False)
+            chess_fig.update_layout(title="Current Game Piece Counts")
+    else:
+        chess_fig.add_annotation(text="No moves data available for this game", 
+                         xref="paper", yref="paper",
+                         x=0.5, y=0.5, showarrow=False)
+        chess_fig.update_layout(title="Current Game Piece Counts")
+    
+    return chess_fig
+
+@callback(
+    Output("is-loaded", "data"),
+    [Input("critical-interval", "n_intervals")]
+)
+def update_is_loaded(n):
+    """Update is-loaded status to indicate dashboard is ready."""
+    return True

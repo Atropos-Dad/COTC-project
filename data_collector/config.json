@@ -1,6 +1,6 @@
 {
   "server": {
-    "host": "ec2-44-204-228-161.compute-1.amazonaws.com",
+    "host": "localhost",
     "port": 5000
   },
   "logging_config": {
@@ -24,8 +24,8 @@
   "metrics": {
     "system_metrics_interval_seconds": 15.0,
     "endpoints": {
-      "system_metrics": "ws://ec2-44-204-228-161.compute-1.amazonaws.com:5000/ws/metrics",
-      "game_metrics": "ws://ec2-44-204-228-161.compute-1.amazonaws.com:5000/ws/game_metrics"
+      "system_metrics": "ws://localhost:5000/ws/metrics",
+      "game_metrics": "ws://localhost:5000/ws/game_metrics"
     }
   }
 }

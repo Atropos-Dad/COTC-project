@@ -415,36 +415,10 @@ def save_chess_data(data):
                 white_time = fields.get('white_time')
                 black_time = fields.get('black_time')
                 
-                # Check if FEN position is missing but we have a last_move
-                if (not fen_position or not is_valid_fen(fen_position)) and last_move:
-                    logger.info(f"[DB_FEN_DERIVE] Deriving FEN for game {game_id} move {last_move}")
-                    
-                    try:
-                        # Get previous moves to derive the current FEN
-                        previous_moves = session.query(Move).filter(
-                            Move.game_id == game_id
-                        ).order_by(Move.timestamp).all()
-                        
-                        # Create a new list with all previous moves plus the current one
-                        # This is needed because the current move is not yet in the database
-                        current_move = Move(
-                            game_id=game_id,
-                            last_move=last_move,
-                            fen_position=None  # We're calculating this
-                        )
-                        
-                        all_moves = previous_moves + [current_move]
-                        
-                        # Derive the FEN from the moves
-                        calculated_fen = derive_fen_from_moves(all_moves)
-                        fen_position = calculated_fen
-                        
-                        logger.info(f"[DB_FEN_DERIVED] Successfully derived FEN: {fen_position}")
-                    except Exception as e:
-                        logger.error(f"[DB_FEN_ERROR] Could not derive FEN: {str(e)}")
-                        # Use default FEN if we can't derive one (better than nothing)
-                        if not fen_position:
-                            fen_position = DEFAULT_FEN
+                # Check if FEN position is missing (should be very rare now since we modified the client)
+                if not fen_position or not is_valid_fen(fen_position):
+                    logger.warning(f"[DB_FEN_MISSING] Missing or invalid FEN for game {game_id}, using DEFAULT_FEN")
+                    fen_position = DEFAULT_FEN
                 
                 logger.debug(f"[DB_MOVE_DETAILS] Last move: {last_move} | FEN: {fen_position}")
                 logger.debug(f"[DB_MOVE_CLOCK] White time: {white_time} | Black time: {black_time}")

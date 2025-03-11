@@ -21,6 +21,7 @@ dependencies = [
     "chess>=1.11.2",
     "colorlog>=6.9.0",
     "flask-caching>=2.3.1",
+    "psutils>=3.3.9",
 ]
 
 [tool.poetry.dependencies]

@@ -97,6 +97,11 @@ class ChessGameMetrics:
             if self.black_piece_count is not None:
                 fields["black_piece_count"] = self.black_piece_count
             
+            # Always include FEN position if available (MODIFIED)
+            if self.fen_position:
+                fields["fen_position"] = self.fen_position
+                logger.debug("FEN position for %s: %s", "new game" if self.new_game else "move", self.fen_position)
+            
             if self.new_game:
                 # For new games, include all metadata
                 tags.update({
@@ -107,10 +112,6 @@ class ChessGameMetrics:
                     "white_rating": self.white_player.rating,
                     "black_rating": self.black_player.rating
                 })
-                
-                if self.fen_position:
-                    fields["fen_position"] = self.fen_position
-                    logger.debug("New game FEN position: %s", self.fen_position)
                     
             elif self.game_ended:
                 # For game endings, include outcome information

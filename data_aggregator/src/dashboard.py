@@ -494,8 +494,8 @@ def update_event_graphs(n):
                 lambda x: x.replace(second=(x.second // 15) * 15, microsecond=0)
             )
             
-            # Aggregate by 15-second intervals
-            df = df.groupby('time_rounded').sum().reset_index()
+            # Aggregate by 15-second intervals - only sum the count column
+            df = df.groupby('time_rounded')['count'].sum().reset_index()
             
             # Create the figure
             ingestion_fig = px.bar(df, x='time_rounded', y='count',

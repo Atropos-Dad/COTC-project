@@ -17,8 +17,24 @@ from src.lib_config.config import Config
 config_path = os.path.join(project_root, "config.json")
 config = Config(config_path=config_path)
 
-# Import the Flask application
-from src.app import app as application
+# Get the logger for this module
+logger = config.get_logger(__name__)
+logger.info("Starting WSGI application")
 
-# The uWSGI server expects the Flask application to be called "application"
-# If you're using SocketIO directly without Flask, you would need a different approach 
+# This is the critical part for SocketIO
+try:
+    import eventlet
+    eventlet.monkey_patch()
+    logger.info("Eventlet monkey patching applied")
+except ImportError:
+    logger.error("Eventlet not available - SocketIO may not work correctly")
+    pass
+
+# Import the Flask application and SocketIO instance
+from src.app import app, socketio
+
+# Create the WSGI application
+# For uWSGI with SocketIO, we need the SocketIO middleware
+application = socketio.middleware(app)
+
+logger.info("WSGI application initialized and ready") 

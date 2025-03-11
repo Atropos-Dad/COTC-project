@@ -3,8 +3,11 @@
 # Activate virtual environment
 source .venv/bin/activate
 
-# Install uWSGI if not already installed
-pip install uwsgi
+# Install uWSGI and other required packages if not already installed
+pip install uwsgi eventlet gevent flask-socketio
 
-# Run uWSGI with the configuration file
-uwsgi --ini uwsgi.ini 
+# Enable verbose logging
+export UWSGI_LOGLEVEL=debug
+
+# Run uWSGI with the configuration file in verbose mode
+uwsgi --ini uwsgi.ini --enable-threads --thunder-lock --py-autoreload=1 

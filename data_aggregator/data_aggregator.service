@@ -5,8 +5,8 @@ After=network.target
 [Service]
 User=www-data
 Group=www-data
-WorkingDirectory=/path/to/data_aggregator
-ExecStart=/path/to/data_aggregator/.venv/bin/uwsgi --ini uwsgi.ini
+WorkingDirectory=/home/ubuntu/COTC-project/data_aggregator
+ExecStart=/home/ubuntu/COTC-project/data_aggregator/.venv/bin/uwsgi --ini uwsgi.ini
 Restart=always
 KillSignal=SIGQUIT
 Type=notify

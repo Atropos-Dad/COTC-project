@@ -21,7 +21,7 @@ This guide explains how to deploy the Data Aggregator application using uWSGI, e
 2. **Install the application requirements**:
    ```bash
    pip install -r requirements.txt
-   pip install uwsgi eventlet gevent flask-socketio
+   pip install uwsgi
    ```
 
 ## Running with uWSGI
@@ -36,22 +36,7 @@ Use the provided shell script:
 ### Manual Start
 
 ```bash
-uwsgi --ini uwsgi.ini --enable-threads --thunder-lock
-```
-
-## Testing SocketIO Functionality
-
-We've provided a test script to verify WebSocket functionality:
-
-```bash
-# Make sure the server is running first!
-./test_socketio.py
-```
-
-If the WebSocket functionality doesn't work properly with uWSGI, you can try running the Flask-SocketIO server directly:
-
-```bash
-./run_socketio_directly.py
+uwsgi --ini uwsgi.ini
 ```
 
 ## Systemd Service Setup (for Production)
@@ -90,52 +75,23 @@ If the WebSocket functionality doesn't work properly with uWSGI, you can try run
 
 ## Troubleshooting
 
-### Common uWSGI + SocketIO Issues
-
-If uWSGI gets stuck at `[uWSGI] getting INI configuration from uwsgi.ini`, try these solutions:
-
-1. **Use HTTP instead of socket for testing**:
-   - In uwsgi.ini, ensure you're using the HTTP option instead of socket
-   - `http = 0.0.0.0:5000` should be uncommented
-   - Comment out the socket lines with `#`
-
-2. **Reduce complexity**:
-   - Set processes to 1 and threads to 1
-   - Enable single-interpreter mode
-   - Add gevent support with `gevent = 1000`
-
-3. **Check for monkey patching issues**:
-   - Make sure eventlet.monkey_patch() is called BEFORE importing Flask-SocketIO
-   - Use the updated wsgi.py which handles this correctly
-
-4. **Try running with additional flags**:
-   ```bash
-   uwsgi --ini uwsgi.ini --enable-threads --thunder-lock --py-autoreload=1
-   ```
-
-5. **Test with direct Flask-SocketIO**:
-   - If uWSGI doesn't work, run the application directly with Flask-SocketIO:
-   ```bash
-   ./run_socketio_directly.py
-   ```
-
-### General Troubleshooting
-
+### Check logs:
 - uWSGI logs: `tail -f logs/uwsgi.log`
 - Nginx logs: `tail -f /var/log/nginx/error.log`
-- Python tracebacks: `uwsgi --connect-and-read uwsgi-tracebacker.sock`
 
 ### Common issues:
 1. **Socket permission denied**: Make sure the socket file has the correct permissions.
 2. **Module not found**: Ensure your virtual environment is correctly activated.
 3. **WebSocket connection issues**: Check that Nginx is properly configured for WebSockets.
-4. **Eventlet/Gevent conflicts**: Be careful mixing eventlet and gevent.
 
 ## Performance Tuning
 
-For Flask-SocketIO applications, the optimal configuration is often:
+Adjust these parameters in `uwsgi.ini` based on your server's capabilities:
+- `processes`: Number of worker processes (typically 1-2 per CPU core)
+- `threads`: Number of threads per process
+- `buffer-size`: Increase for larger requests
 
-- Using `gevent = 1000` in uwsgi.ini
-- Setting `processes = 1` (multiple processes can cause WebSocket routing issues)
-- Enabling threads with `enable-threads = true`
-- Using a proper load balancer for horizontal scaling instead of multiple processes 
+For high-traffic deployments, consider:
+- Increasing the number of workers
+- Implementing a load balancer
+- Using more advanced monitoring 

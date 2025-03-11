@@ -33,9 +33,22 @@ class LoggingConfig:
     console_output: ConsoleLoggingConfig
     file_output: FileLoggingConfig
 
+@dataclass
+class DatabaseConfig:
+    type: str
+    host: str
+    port: int
+    name: str
+    user: str
+    password: str
+    pool_size: int
+    max_overflow: int
+    pool_timeout: int
+
 class Config:
     server: ServerConfig
     logging_config: LoggingConfig
+    database: DatabaseConfig
 
     @staticmethod
     def set_working_directory(script_path: str) -> str:
@@ -78,6 +91,7 @@ class Config:
             console_output=ConsoleLoggingConfig(**raw_logging_config.get('console_output', {})),
             file_output=FileLoggingConfig(**raw_logging_config.get('file_output', {}))
         )
+        self.database = DatabaseConfig(**self._config.get('database', {}))
         self.setup_logging()
 
         

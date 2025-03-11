@@ -153,27 +153,38 @@ dash_app.layout = dbc.Container([
                         dbc.Col([
                             html.Div("CPU Usage: ", className="fw-bold"),
                             html.Span(id="current-cpu")
-                        ], width=3),
+                        ], width=4),
                         dbc.Col([
                             html.Div("Memory Usage: ", className="fw-bold"),
                             html.Span(id="current-memory")
-                        ], width=3),
+                        ], width=4),
                         dbc.Col([
                             html.Div("Processes: ", className="fw-bold"),
                             html.Span(id="current-processes")
-                        ], width=2),
-                        dbc.Col([
-                            html.Div("White Pieces: ", className="fw-bold"),
-                            html.Span(id="current-white-pieces")
-                        ], width=2),
-                        dbc.Col([
-                            html.Div("Black Pieces: ", className="fw-bold"),
-                            html.Span(id="current-black-pieces")
-                        ], width=2)
+                        ], width=4)
                     ])
                 ])
             ])
-        ])
+        ], width=8),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Latest Piece Counts", className="text-center"),
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            html.Div("White Pieces: ", className="fw-bold"),
+                            html.Span(id="latest-white-pieces")
+                        ], width=6),
+                        dbc.Col([
+                            html.Div("Black Pieces: ", className="fw-bold"),
+                            html.Span(id="latest-black-pieces")
+                        ], width=6)
+                    ]),
+                    html.Div("Game ID: ", className="fw-bold mt-2"),
+                    html.Small(id="latest-pieces-game-id", className="text-muted")
+                ])
+            ])
+        ], width=4)
     ], className="mb-4"),
     
     # System metrics graphs - Combined into one row for system metrics graphs
@@ -774,8 +785,6 @@ def update_chess_board(selected_game_id, n):
     [Output("current-cpu", "children"),
      Output("current-memory", "children"),
      Output("current-processes", "children"),
-     Output("current-white-pieces", "children"),
-     Output("current-black-pieces", "children"),
      Output("cpu-usage-graph", "figure"),
      Output("memory-usage-graph", "figure"),
      Output("network-traffic-graph", "figure")],
@@ -785,7 +794,7 @@ def update_chess_board(selected_game_id, n):
 def update_system_metrics_combined(n):
     """Single callback for all system metrics to reduce HTTP requests."""
     # Get basic metrics
-    latest_cpu, latest_memory, latest_processes, latest_white_pieces, latest_black_pieces = get_system_metrics()
+    latest_cpu, latest_memory, latest_processes, _, _ = get_system_metrics()
     
     # Format CPU usage
     if latest_cpu and latest_cpu.value is not None:
@@ -805,119 +814,133 @@ def update_system_metrics_combined(n):
     else:
         processes_text = "N/A"
     
-    # Format chess piece counts
-    if latest_white_pieces is not None:
-        white_pieces_text = f"{latest_white_pieces:.1f}"
-    else:
-        white_pieces_text = "N/A"
-        
-    if latest_black_pieces is not None:
-        black_pieces_text = f"{latest_black_pieces:.1f}"
-    else:
-        black_pieces_text = "N/A"
-    
     # Generate CPU usage graph
     session = Session()
     try:
-        # Get CPU usage data for the last hour
-        one_hour_ago = datetime.now() - timedelta(hours=1)
-        cpu_metrics = session.query(Metric.timestamp, Metric.value) \
-            .join(MetricType) \
-            .filter(MetricType.name == 'cpu_percent') \
-            .filter(Metric.timestamp > one_hour_ago) \
-            .order_by(Metric.timestamp).all()
+        # Query data for the CPU usage graph - use SQLite compatible functions
+        cpu_metrics = session.query(
+            func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp).label('minute'),
+            func.avg(Metric.value).label('avg_value')
+        ).join(MetricType, Metric.metric_type_id == MetricType.id) \
+          .filter(MetricType.name == 'cpu_percent') \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
+          .group_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .order_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .all()
         
-        if cpu_metrics:
-            df_cpu = pd.DataFrame(cpu_metrics, columns=['timestamp', 'value'])
-            cpu_fig = px.line(df_cpu, x='timestamp', y='value', 
-                        title='CPU Usage (%)',
-                        labels={'value': 'CPU Usage (%)', 'timestamp': 'Time'})
-            cpu_fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
-        else:
-            # Empty figure with message
-            cpu_fig = go.Figure()
-            cpu_fig.add_annotation(text="No CPU data available", 
-                              xref="paper", yref="paper",
-                              x=0.5, y=0.5, showarrow=False)
-            cpu_fig.update_layout(title='CPU Usage (%)')
-    
-        # Get memory usage data
-        memory_metrics = session.query(Metric.timestamp, Metric.value) \
-            .join(MetricType) \
-            .filter(MetricType.name == 'memory_percent') \
-            .filter(Metric.timestamp > one_hour_ago) \
-            .order_by(Metric.timestamp).all()
+        # Extract data for plotting
+        cpu_times = [datetime.strptime(m.minute, '%Y-%m-%d %H:%M:00') for m in cpu_metrics]
+        cpu_values = [m.avg_value for m in cpu_metrics]
         
-        if memory_metrics:
-            df_memory = pd.DataFrame(memory_metrics, columns=['timestamp', 'value'])
-            memory_fig = px.line(df_memory, x='timestamp', y='value',
-                           title='Memory Usage (%)',
-                           labels={'value': 'Memory Usage (%)', 'timestamp': 'Time'})
-            memory_fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
-        else:
-            # Empty figure with message
-            memory_fig = go.Figure()
-            memory_fig.add_annotation(text="No memory data available", 
-                              xref="paper", yref="paper",
-                              x=0.5, y=0.5, showarrow=False)
-            memory_fig.update_layout(title='Memory Usage (%)')
-    
-        # Get network traffic data
-        network_in_metrics = session.query(Metric.timestamp, Metric.value) \
-            .join(MetricType) \
-            .filter(MetricType.name == 'network_bytes_recv') \
-            .filter(Metric.timestamp > one_hour_ago) \
-            .order_by(Metric.timestamp).all()
-            
-        network_out_metrics = session.query(Metric.timestamp, Metric.value) \
-            .join(MetricType) \
-            .filter(MetricType.name == 'network_bytes_sent') \
-            .filter(Metric.timestamp > one_hour_ago) \
-            .order_by(Metric.timestamp).all()
-        
-        # Create a figure with two traces
-        network_fig = go.Figure()
-        
-        if network_in_metrics:
-            df_net_in = pd.DataFrame(network_in_metrics, columns=['timestamp', 'value'])
-            df_net_in['value'] = df_net_in['value'] / 1024  # Convert to KB
-            network_fig.add_trace(go.Scatter(
-                x=df_net_in['timestamp'],
-                y=df_net_in['value'],
-                mode='lines',
-                name='Bytes Received (KB)'
-            ))
-        
-        if network_out_metrics:
-            df_net_out = pd.DataFrame(network_out_metrics, columns=['timestamp', 'value'])
-            df_net_out['value'] = df_net_out['value'] / 1024  # Convert to KB
-            network_fig.add_trace(go.Scatter(
-                x=df_net_out['timestamp'],
-                y=df_net_out['value'],
-                mode='lines',
-                name='Bytes Sent (KB)'
-            ))
-        
-        if not network_in_metrics and not network_out_metrics:
-            network_fig.add_annotation(text="No network data available", 
-                                 xref="paper", yref="paper",
-                                 x=0.5, y=0.5, showarrow=False)
-        
-        network_fig.update_layout(
-            title='Network Traffic',
-            yaxis_title='Traffic (KB)',
+        # Create CPU figure
+        cpu_fig = go.Figure()
+        cpu_fig.add_trace(go.Scatter(
+            x=cpu_times, 
+            y=cpu_values,
+            mode='lines+markers',
+            name='CPU Usage',
+            line=dict(color='red')
+        ))
+        cpu_fig.update_layout(
+            title='CPU Usage (30 min)',
             xaxis_title='Time',
-            margin=dict(l=20, r=20, t=40, b=20)
+            yaxis_title='CPU %',
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=250
         )
         
-        return cpu_text, memory_text, processes_text, white_pieces_text, black_pieces_text, cpu_fig, memory_fig, network_fig
+        # Query data for the Memory usage graph
+        memory_metrics = session.query(
+            func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp).label('minute'),
+            func.avg(Metric.value).label('avg_value')
+        ).join(MetricType, Metric.metric_type_id == MetricType.id) \
+          .filter(MetricType.name == 'memory_percent') \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
+          .group_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .order_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .all()
+        
+        # Extract data for plotting
+        memory_times = [datetime.strptime(m.minute, '%Y-%m-%d %H:%M:00') for m in memory_metrics]
+        memory_values = [m.avg_value for m in memory_metrics]
+        
+        # Create Memory figure
+        memory_fig = go.Figure()
+        memory_fig.add_trace(go.Scatter(
+            x=memory_times, 
+            y=memory_values,
+            mode='lines+markers',
+            name='Memory Usage',
+            line=dict(color='blue')
+        ))
+        memory_fig.update_layout(
+            title='Memory Usage (30 min)',
+            xaxis_title='Time',
+            yaxis_title='Memory %',
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=250
+        )
+        
+        # Query data for Network traffic graph
+        network_in_metrics = session.query(
+            func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp).label('minute'),
+            func.avg(Metric.value).label('avg_value')
+        ).join(MetricType, Metric.metric_type_id == MetricType.id) \
+          .filter(MetricType.name == 'network_in_bytes') \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
+          .group_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .order_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .all()
+        
+        network_out_metrics = session.query(
+            func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp).label('minute'),
+            func.avg(Metric.value).label('avg_value')
+        ).join(MetricType, Metric.metric_type_id == MetricType.id) \
+          .filter(MetricType.name == 'network_out_bytes') \
+          .filter(Metric.timestamp > (datetime.now() - timedelta(minutes=30))) \
+          .group_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .order_by(func.strftime('%Y-%m-%d %H:%M:00', Metric.timestamp)) \
+          .all()
+        
+        # Extract data for plotting
+        network_in_times = [datetime.strptime(m.minute, '%Y-%m-%d %H:%M:00') for m in network_in_metrics]
+        network_in_values = [m.avg_value / 1024 for m in network_in_metrics]  # Convert to KB
+        
+        network_out_times = [datetime.strptime(m.minute, '%Y-%m-%d %H:%M:00') for m in network_out_metrics]
+        network_out_values = [m.avg_value / 1024 for m in network_out_metrics]  # Convert to KB
+        
+        # Create Network figure
+        network_fig = go.Figure()
+        network_fig.add_trace(go.Scatter(
+            x=network_in_times, 
+            y=network_in_values,
+            mode='lines+markers',
+            name='Network In (KB)',
+            line=dict(color='green')
+        ))
+        network_fig.add_trace(go.Scatter(
+            x=network_out_times, 
+            y=network_out_values,
+            mode='lines+markers',
+            name='Network Out (KB)',
+            line=dict(color='orange')
+        ))
+        network_fig.update_layout(
+            title='Network Traffic (30 min)',
+            xaxis_title='Time',
+            yaxis_title='KB',
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=250
+        )
+        
+        return cpu_text, memory_text, processes_text, cpu_fig, memory_fig, network_fig
     except Exception as e:
         logger.exception(f"Error updating system metrics: {str(e)}")
         empty_fig = go.Figure()
         empty_fig.add_annotation(text="Error loading data", 
-                           xref="paper", yref="paper",
-                           x=0.5, y=0.5, showarrow=False)
-        return "Error", "Error", "Error", "Error", "Error", empty_fig, empty_fig, empty_fig
+                            xref="paper", yref="paper",
+                            x=0.5, y=0.5, showarrow=False)
+        return "Error", "Error", "Error", empty_fig, empty_fig, empty_fig
     finally:
         session.close()
 
@@ -1435,6 +1458,23 @@ def get_system_metrics():
     finally:
         session.close()
 
+@cached_query(timeout=5)
+def get_latest_piece_counts():
+    """Get the latest piece counts from the most recent move."""
+    session = Session()
+    try:
+        # Get latest move by timestamp
+        latest_move = session.query(Move) \
+            .order_by(desc(Move.timestamp)) \
+            .first()
+            
+        if latest_move:
+            return latest_move.white_piece_count, latest_move.black_piece_count, latest_move.game_id
+        else:
+            return None, None, None
+    finally:
+        session.close()
+
 @callback(
     [Output("combined-metrics-graph", "figure")],
     [Input("slow-interval", "n_intervals")]
@@ -1621,3 +1661,28 @@ def update_chess_pieces_graph(selected_game_id, n):
 def update_is_loaded(n):
     """Update is-loaded status to indicate dashboard is ready."""
     return True
+
+# Add new callback for piece counts
+@callback(
+    [Output("latest-white-pieces", "children"),
+     Output("latest-black-pieces", "children"),
+     Output("latest-pieces-game-id", "children")],
+    [Input("critical-interval", "n_intervals")],
+    prevent_initial_call=True
+)
+def update_latest_piece_counts(n):
+    """Update the latest piece counts display."""
+    latest_white, latest_black, game_id = get_latest_piece_counts()
+    
+    # Format piece counts
+    if latest_white is not None:
+        white_pieces_text = f"{int(latest_white)}"
+    else:
+        white_pieces_text = "N/A"
+        
+    if latest_black is not None:
+        black_pieces_text = f"{int(latest_black)}"
+    else:
+        black_pieces_text = "N/A"
+    
+    return white_pieces_text, black_pieces_text, game_id or "N/A"

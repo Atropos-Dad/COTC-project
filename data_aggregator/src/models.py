@@ -15,7 +15,7 @@ class Player(Base):
     """
     __tablename__ = 'players'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False, index=True)
     title = Column(String(10), nullable=True)
     # We'll track the current rating, which can be updated
@@ -35,7 +35,7 @@ class TimeZoneSource(Base):
     """
     __tablename__ = 'timezone_sources'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(50), nullable=False, unique=True, index=True)
     
     # Relationships
@@ -53,7 +53,7 @@ class Game(Base):
     """
     __tablename__ = 'games'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     game_id = Column(String(20), unique=True, nullable=False, index=True)
     white_player_id = Column(Integer, ForeignKey('players.id'), nullable=True)
     black_player_id = Column(Integer, ForeignKey('players.id'), nullable=True)
@@ -74,7 +74,7 @@ class Move(Base):
     """
     __tablename__ = 'moves'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     game_id = Column(String(20), ForeignKey('games.game_id'), nullable=False, index=True)
     last_move = Column(String(10), nullable=True)
     white_time = Column(Integer, nullable=True)  # Remaining time in seconds
@@ -82,6 +82,7 @@ class Move(Base):
     white_piece_count = Column(Integer, nullable=True)
     black_piece_count = Column(Integer, nullable=True)
     fen_position = Column(Text, nullable=True)  # Current board position in FEN notation
+    # Non-unique timestamp to be compatible with TimescaleDB hypertables
     timestamp = Column(DateTime(timezone=True), nullable=False, default=datetime.now, index=True)  # Changed to timezone-aware
     timezone_id = Column(Integer, ForeignKey('timezone_sources.id'), nullable=True)
     
@@ -100,12 +101,18 @@ class RawData(Base):
     """
     __tablename__ = 'raw_data'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     measurement = Column(String(255), nullable=True, index=True)
     data = Column(JSON, nullable=False)
+    # Non-unique timestamps to be compatible with TimescaleDB hypertables
     received_timestamp = Column(DateTime(timezone=True), nullable=False, default=datetime.now, index=True)
     system_timestamp = Column(DateTime(timezone=True), nullable=True)  # Original timestamp from the data if available
     timezone_id = Column(Integer, ForeignKey('timezone_sources.id'), nullable=True)
+    
+    # Add composite index for common query patterns
+    __table_args__ = (
+        Index('idx_raw_data_measurement_time', 'measurement', 'received_timestamp'),
+    )
     
     # Relationships
     timezone = relationship("TimeZoneSource", back_populates="raw_data")
@@ -120,7 +127,7 @@ class MetricType(Base):
     """
     __tablename__ = 'metric_types'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False, unique=True, index=True)
     
     # Relationships
@@ -136,7 +143,7 @@ class MetricOrigin(Base):
     """
     __tablename__ = 'metric_origins'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False, unique=True, index=True)
     
     # Relationships
@@ -153,7 +160,7 @@ class Metric(Base):
     """
     __tablename__ = 'metrics'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     origin_id = Column(Integer, ForeignKey('metric_origins.id'), nullable=False, index=True)
     metric_type_id = Column(Integer, ForeignKey('metric_types.id'), nullable=False, index=True)
     value = Column(Float, nullable=False)  # Actual numeric value of the metric
@@ -166,9 +173,9 @@ class Metric(Base):
     metric_type_rel = relationship("MetricType", back_populates="metrics")
     timezone = relationship("TimeZoneSource", back_populates="metrics")
     
-    # Composite index for common queries by origin and timestamp
+    # Replace unique constraint with a non-unique composite index for query performance
     __table_args__ = (
-        UniqueConstraint('origin_id', 'metric_type_id', 'timestamp', name='uix_metric_origin_type_time'),
+        Index('idx_metric_origin_type_time', 'origin_id', 'metric_type_id', 'timestamp'),
     )
     
     def __repr__(self):

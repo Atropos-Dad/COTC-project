@@ -1011,13 +1011,23 @@ def update_all_metrics(n, origin_filter, type_filter, page, page_size, start_dat
         
         # Apply date range filter if provided
         if start_date:
-            start_datetime = datetime.strptime(start_date, '%Y-%m-%d')
-            query = query.filter(Metric.timestamp >= start_datetime)
+            try:
+                # Convert to string first if it's not already a string
+                start_date_str = str(start_date) if not isinstance(start_date, str) else start_date
+                start_datetime = datetime.strptime(start_date_str, '%Y-%m-%d')
+                query = query.filter(Metric.timestamp >= start_datetime)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid start_date format: {start_date}")
+                
         if end_date:
-            # Add one day to include the end date fully
-            end_datetime = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
-            query = query.filter(Metric.timestamp < end_datetime)
-            
+            try:
+                # Convert to string first if it's not already a string
+                end_date_str = str(end_date) if not isinstance(end_date, str) else end_date
+                end_datetime = datetime.strptime(end_date_str, '%Y-%m-%d') + timedelta(days=1)
+                query = query.filter(Metric.timestamp < end_datetime)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid end_date format: {end_date}")
+        
         # Apply value range filters if provided
         if min_value is not None:
             query = query.filter(Metric.value >= min_value)
@@ -1115,13 +1125,23 @@ def update_pagination(n, origin_filter, type_filter, page_size, start_date, end_
             
         # Apply date range filter if provided
         if start_date:
-            start_datetime = datetime.strptime(start_date, '%Y-%m-%d')
-            query = query.filter(Metric.timestamp >= start_datetime)
+            try:
+                # Convert to string first if it's not already a string
+                start_date_str = str(start_date) if not isinstance(start_date, str) else start_date
+                start_datetime = datetime.strptime(start_date_str, '%Y-%m-%d')
+                query = query.filter(Metric.timestamp >= start_datetime)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid start_date format: {start_date}")
+                
         if end_date:
-            # Add one day to include the end date fully
-            end_datetime = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
-            query = query.filter(Metric.timestamp < end_datetime)
-            
+            try:
+                # Convert to string first if it's not already a string
+                end_date_str = str(end_date) if not isinstance(end_date, str) else end_date
+                end_datetime = datetime.strptime(end_date_str, '%Y-%m-%d') + timedelta(days=1)
+                query = query.filter(Metric.timestamp < end_datetime)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid end_date format: {end_date}")
+        
         # Apply value range filters if provided
         if min_value is not None:
             query = query.filter(Metric.value >= min_value)
@@ -1208,7 +1228,7 @@ def update_metric_type_filter(n, origin_filter):
 def reset_filters(n_clicks):
     """Reset all metric filters to default values."""
     # Reset all filters and go back to page 1
-    return None, None, 1, None, None, None, None
+    return None, None, 1, None, None, None, None, None, None
 
 # Callback to reset pagination when Apply Filters is clicked
 @callback(

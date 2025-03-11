@@ -10,4 +10,4 @@ pip install uwsgi eventlet gevent flask-socketio
 export UWSGI_LOGLEVEL=debug
 
 # Run uWSGI with the configuration file in verbose mode
-uwsgi --ini uwsgi.ini --enable-threads --thunder-lock --py-autoreload=1 
+uwsgi --ini uwsgi.ini --enable-threads --thunder-lock 

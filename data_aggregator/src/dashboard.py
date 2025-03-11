@@ -1213,7 +1213,7 @@ def update_metric_type_filter(n, origin_filter):
 def reset_filters(n_clicks):
     """Reset all metric filters to default values."""
     # Reset all filters and go back to page 1
-    return None, None, 1, None, None, None, None, None, None
+    return None, None, 1, None, None, None, None, None
 
 # Callback to reset pagination when Apply Filters is clicked
 @callback(
@@ -1472,7 +1472,7 @@ def get_latest_piece_counts():
     finally:
         session.close()
 
-@callback(
+@dash_app.callback(
     Output("combined-metrics-graph", "figure"),
     [Input("slow-interval", "n_intervals")]
 )
